@@ -1,4 +1,4 @@
-﻿import os
+import os
 from flask import Flask, render_template, redirect, url_for, request, flash
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
@@ -8,11 +8,13 @@ from datetime import datetime
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'chave_super_secreta_seguranca_total'
 
-# Lógica Híbrida de Banco de Dados
-# Se existir a variavel DATABASE_URL (no Render), usa ela. Se não, usa o arquivo local.
+# --- LÓGICA DO BANCO DE DADOS (HÍBRIDO) ---
+# Se estiver no Render (tem DATABASE_URL), usa PostgreSQL.
+# Se estiver no seu PC, usa SQLite.
 uri = os.getenv("DATABASE_URL")
 if uri and uri.startswith("postgres://"):
     uri = uri.replace("postgres://", "postgresql://", 1)
+
 app.config['SQLALCHEMY_DATABASE_URI'] = uri or 'sqlite:///escola.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
@@ -28,7 +30,6 @@ class User(UserMixin, db.Model):
     email = db.Column(db.String(100), unique=True, nullable=False)
     senha = db.Column(db.String(200), nullable=False)
     is_professor = db.Column(db.Boolean, default=False)
-    # Relacionamento: Um aluno tem muitos resultados
     resultados = db.relationship('Resultado', backref='aluno', lazy=True)
 
 class Prova(db.Model):
@@ -58,10 +59,10 @@ class Resultado(db.Model):
 def load_user(user_id):
     return User.query.get(int(user_id))
 
-# --- ROTAS BÁSICAS ---
+# --- ROTAS ---
 @app.route('/')
 def index():
-    return render_template('index.html') # Certifique-se de ter este arquivo ou mude para retornar texto simples
+    return render_template('index.html')
 
 @app.route('/registro', methods=['GET', 'POST'])
 def registro():
@@ -106,7 +107,70 @@ def dashboard():
         meus_resultados = Resultado.query.filter_by(aluno_id=current_user.id).all()
         return render_template('dash_aluno.html', provas=provas, resultados=meus_resultados)
 
-# Inicializacao
+@app.route('/criar_prova', methods=['GET', 'POST'])
+@login_required
+def criar_prova():
+    if not current_user.is_professor: return redirect(url_for('dashboard'))
+    if request.method == 'POST':
+        titulo = request.form.get('titulo')
+        nova_prova = Prova(titulo=titulo, criado_por=current_user.id)
+        db.session.add(nova_prova)
+        db.session.commit()
+        return redirect(url_for('adicionar_questoes', prova_id=nova_prova.id))
+    return render_template('criar_prova.html')
+
+@app.route('/adicionar_questoes/<int:prova_id>', methods=['GET', 'POST'])
+@login_required
+def adicionar_questoes(prova_id):
+    if request.method == 'POST':
+        q = Questao(
+            texto=request.form.get('texto'),
+            opcao_a=request.form.get('opcao_a'),
+            opcao_b=request.form.get('opcao_b'),
+            opcao_c=request.form.get('opcao_c'),
+            opcao_d=request.form.get('opcao_d'),
+            correta=request.form.get('correta'),
+            prova_id=prova_id
+        )
+        db.session.add(q)
+        db.session.commit()
+    prova = Prova.query.get(prova_id)
+    return render_template('add_questoes.html', prova=prova)
+
+@app.route('/fazer_prova/<int:prova_id>', methods=['GET', 'POST'])
+@login_required
+def fazer_prova(prova_id):
+    prova = Prova.query.get(prova_id)
+    if request.method == 'POST':
+        acertos = 0
+        total = len(prova.questoes)
+        for questao in prova.questoes:
+            resposta_aluno = request.form.get(f'q_{questao.id}')
+            if resposta_aluno == questao.correta:
+                acertos += 1
+        nota_final = (acertos / total) * 10 if total > 0 else 0
+        resultado = Resultado(aluno_id=current_user.id, prova_id=prova.id, nota=nota_final)
+        db.session.add(resultado)
+        db.session.commit()
+        return render_template('resultado.html', nota=nota_final, total=total, acertos=acertos)
+    return render_template('fazer_prova.html', prova=prova)
+
+@app.route('/logout')
+@login_required
+def logout():
+    logout_user()
+    return redirect(url_for('index'))
+
+# --- ROTA MÁGICA DE CONFIGURAÇÃO ---
+@app.route('/setup_banco_magico')
+def setup_banco_magico():
+    try:
+        with app.app_context():
+            db.create_all()
+        return "<h1>Sucesso! Tabelas criadas.</h1> <a href='/registro'>Vá cadastrar agora</a>"
+    except Exception as e:
+        return f"<h1>Erro: {str(e)}</h1>"
+
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
