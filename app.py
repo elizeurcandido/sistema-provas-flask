@@ -1,18 +1,26 @@
 import os
 import io
-import pandas as pd # Biblioteca para criar o Excel
+import json
+import pandas as pd
 from flask import Flask, render_template, redirect, url_for, request, flash, make_response
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
-from fpdf import FPDF 
+from fpdf import FPDF
+import google.generativeai as genai
+from pypdf import PdfReader
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'chave_super_secreta_seguranca_total'
 
+# --- CONFIGURAÇÃO GEMINI (IA) ---
+# Tenta pegar a chave do ambiente (Render) ou usa uma string vazia
+GOOGLE_API_KEY = os.getenv('GEMINI_API_KEY')
+if GOOGLE_API_KEY:
+    genai.configure(api_key=GOOGLE_API_KEY)
+
 # --- CONFIGURAÇÃO DO BANCO DE DADOS (HÍBRIDO) ---
-# Tenta pegar a URL do banco do Render. Se não achar, usa SQLite local.
 uri = os.getenv("DATABASE_URL")
 if uri and uri.startswith("postgres://"):
     uri = uri.replace("postgres://", "postgresql://", 1)
@@ -26,7 +34,6 @@ login_manager.init_app(app)
 login_manager.login_view = 'login'
 
 # --- MODELOS (TABELAS) ---
-# Usamos prefixo tb_ para evitar conflito com nomes reservados do Postgres
 class User(UserMixin, db.Model):
     __tablename__ = 'tb_usuarios' 
     id = db.Column(db.Integer, primary_key=True)
@@ -108,7 +115,6 @@ def dashboard():
         provas = Prova.query.filter_by(criado_por=current_user.id).all()
         return render_template('dash_professor.html', provas=provas)
     else:
-        # Pega provas e histórico para o aluno
         provas = Prova.query.all()
         meus_resultados = Resultado.query.filter_by(aluno_id=current_user.id).all()
         ids_feitas = [r.prova_id for r in meus_resultados]
@@ -147,25 +153,34 @@ def adicionar_questoes(prova_id):
 @app.route('/fazer_prova/<int:prova_id>', methods=['GET', 'POST'])
 @login_required
 def fazer_prova(prova_id):
-    # Bloqueia se já fez
     ja_fez = Resultado.query.filter_by(aluno_id=current_user.id, prova_id=prova_id).first()
     if ja_fez:
-        flash('Você já realizou esta prova!')
+        flash('Você já realizou esta prova! Veja seu desempenho no histórico.')
         return redirect(url_for('dashboard'))
 
     prova = Prova.query.get(prova_id)
+    
     if request.method == 'POST':
         acertos = 0
         total = len(prova.questoes)
+        detalhes_gabarito = []
+        
         for questao in prova.questoes:
             resposta_aluno = request.form.get(f'q_{questao.id}')
-            if resposta_aluno == questao.correta:
-                acertos += 1
+            acertou = (resposta_aluno == questao.correta)
+            if acertou: acertos += 1
+            detalhes_gabarito.append({
+                'enunciado': questao.texto,
+                'opcao_a': questao.opcao_a, 'opcao_b': questao.opcao_b,
+                'opcao_c': questao.opcao_c, 'opcao_d': questao.opcao_d,
+                'marcada': resposta_aluno, 'correta': questao.correta, 'acertou': acertou
+            })
+            
         nota_final = (acertos / total) * 10 if total > 0 else 0
         resultado = Resultado(aluno_id=current_user.id, prova_id=prova.id, nota=nota_final)
         db.session.add(resultado)
         db.session.commit()
-        return render_template('resultado.html', nota=nota_final, total=total, acertos=acertos)
+        return render_template('resultado.html', nota=nota_final, total=total, acertos=acertos, gabarito=detalhes_gabarito, resultado_id=resultado.id)
     return render_template('fazer_prova.html', prova=prova)
 
 @app.route('/logout')
@@ -176,15 +191,13 @@ def logout():
 
 # --- FUNCIONALIDADES AVANÇADAS ---
 
-# 1. Gerador de Certificado PDF
 @app.route('/certificado/<int:resultado_id>')
 @login_required
 def gerar_certificado(resultado_id):
     res = Resultado.query.get(resultado_id)
     if res.aluno_id != current_user.id or res.nota < 7.0:
-        flash("Certificado indisponível.")
+        flash("Indisponível.")
         return redirect(url_for('dashboard'))
-    
     prova = Prova.query.get(res.prova_id)
     pdf = FPDF()
     pdf.add_page()
@@ -199,96 +212,130 @@ def gerar_certificado(resultado_id):
     pdf.cell(200, 20, txt=texto, ln=1, align="C")
     pdf.set_font("Arial", size=12)
     pdf.cell(200, 20, txt=f"Data: {res.data_envio.strftime('%d/%m/%Y')}", ln=1, align="C")
-    
     response = make_response(pdf.output(dest='S').encode('latin-1'))
     response.headers['Content-Type'] = 'application/pdf'
     response.headers['Content-Disposition'] = f'attachment; filename=certificado_{res.id}.pdf'
     return response
 
-# 2. Excluir Prova (Professor)
 @app.route('/excluir_prova/<int:prova_id>')
 @login_required
 def excluir_prova(prova_id):
     prova = Prova.query.get(prova_id)
-    # Segurança: Só o dono pode apagar
     if not prova or prova.criado_por != current_user.id:
-        flash('Erro: Você não tem permissão para excluir esta prova.')
         return redirect(url_for('dashboard'))
-    
-    # Limpa resultados antigos dessa prova antes de apagar
     Resultado.query.filter_by(prova_id=prova_id).delete()
+    Questao.query.filter_by(prova_id=prova_id).delete()
     db.session.delete(prova)
     db.session.commit()
-    flash('Prova excluída com sucesso!')
+    flash('Prova excluída.')
     return redirect(url_for('dashboard'))
 
-# 3. Ver Notas da Turma (Professor)
+@app.route('/excluir_questao/<int:questao_id>')
+@login_required
+def excluir_questao(questao_id):
+    questao = Questao.query.get(questao_id)
+    if not questao: return redirect(url_for('dashboard'))
+    prova = Prova.query.get(questao.prova_id)
+    if prova.criado_por != current_user.id: return redirect(url_for('dashboard'))
+    db.session.delete(questao)
+    db.session.commit()
+    flash('Questão removida.')
+    return redirect(url_for('adicionar_questoes', prova_id=prova.id))
+
 @app.route('/ver_notas/<int:prova_id>')
 @login_required
 def ver_notas(prova_id):
     prova = Prova.query.get(prova_id)
-    if not prova or prova.criado_por != current_user.id:
-        return redirect(url_for('dashboard'))
-    
+    if not prova or prova.criado_por != current_user.id: return redirect(url_for('dashboard'))
     resultados = Resultado.query.filter_by(prova_id=prova_id).all()
     return render_template('ver_notas.html', prova=prova, resultados=resultados)
 
-# 4. Exportar Excel (Professor)
 @app.route('/exportar_excel/<int:prova_id>')
 @login_required
 def exportar_excel(prova_id):
     prova = Prova.query.get(prova_id)
-    if not prova or prova.criado_por != current_user.id:
-        flash('Acesso negado.')
-        return redirect(url_for('dashboard'))
-    
+    if not prova or prova.criado_por != current_user.id: return redirect(url_for('dashboard'))
     resultados = Resultado.query.filter_by(prova_id=prova_id).all()
-    
-    # Monta a lista de dados
     dados = []
     for res in resultados:
         dados.append({
-            'Nome do Aluno': res.aluno.nome,
-            'Email': res.aluno.email,
-            'Data de Envio': res.data_envio.strftime('%d/%m/%Y %H:%M'),
-            'Nota': res.nota,
+            'Aluno': res.aluno.nome, 'Email': res.aluno.email,
+            'Data': res.data_envio.strftime('%d/%m/%Y'), 'Nota': res.nota,
             'Status': 'Aprovado' if res.nota >= 7.0 else 'Reprovado'
         })
-    
-    if not dados:
-        flash('Nenhum dado para exportar.')
-        return redirect(url_for('ver_notas', prova_id=prova.id))
-
-    # Cria o DataFrame e o arquivo Excel na memória
     df = pd.DataFrame(dados)
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df.to_excel(writer, index=False, sheet_name='Notas')
     output.seek(0)
-    
-    return make_response(output.read(), 200, {
-        'Content-Disposition': f'attachment; filename=notas_{prova.titulo}.xlsx',
-        'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-    })
+    return make_response(output.read(), 200, {'Content-Disposition': f'attachment; filename=notas_{prova.titulo}.xlsx', 'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'})
 
-# --- ROTAS TÉCNICAS (Diagnóstico e Setup) ---
+# --- GERADOR COM IA (GEMINI) ---
+@app.route('/gerar_com_ia/<int:prova_id>', methods=['POST'])
+@login_required
+def gerar_com_ia(prova_id):
+    if not os.getenv('GEMINI_API_KEY'):
+        flash("Erro: Chave API do Gemini não configurada no Render.")
+        return redirect(url_for('adicionar_questoes', prova_id=prova_id))
+
+    file = request.files['arquivo']
+    if not file:
+        flash("Nenhum arquivo enviado.")
+        return redirect(url_for('adicionar_questoes', prova_id=prova_id))
+
+    try:
+        reader = PdfReader(file)
+        texto_completo = ""
+        for page in reader.pages:
+            texto_completo += page.extract_text()
+        
+        texto_completo = texto_completo[:30000] 
+
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        prompt = f"""
+        Você é um professor experiente. Com base no texto abaixo, crie 3 questões de múltipla escolha.
+        TEXTO: {texto_completo}
+        SAÍDA OBRIGATÓRIA: Retorne APENAS um JSON puro (sem markdown ```json) seguindo estritamente este formato:
+        [
+            {{
+                "texto": "Enunciado da questão aqui",
+                "a": "Opção A", "b": "Opção B", "c": "Opção C", "d": "Opção D",
+                "correta": "a"
+            }}
+        ]
+        A resposta correta deve ser apenas a letra 'a', 'b', 'c' ou 'd' minúscula.
+        """
+
+        response = model.generate_content(prompt)
+        resposta_limpa = response.text.replace("```json", "").replace("```", "").strip()
+        questoes_json = json.loads(resposta_limpa)
+
+        for item in questoes_json:
+            nova_q = Questao(
+                texto=item['texto'],
+                opcao_a=item['a'], opcao_b=item['b'], opcao_c=item['c'], opcao_d=item['d'],
+                correta=item['correta'].lower(),
+                prova_id=prova_id
+            )
+            db.session.add(nova_q)
+        
+        db.session.commit()
+        flash(f"Sucesso! {len(questoes_json)} questões geradas pela IA.")
+
+    except Exception as e:
+        flash(f"Erro ao gerar com IA: {str(e)}")
+        print(f"Erro IA: {e}")
+
+    return redirect(url_for('adicionar_questoes', prova_id=prova_id))
+
+# --- SETUP ---
 @app.route('/debug_banco')
-def debug_banco():
-    banco = app.config['SQLALCHEMY_DATABASE_URI']
-    cor = "green" if "postgres" in banco else "red"
-    return f"<h1 style='color:{cor}'>Banco atual: {banco.split('@')[0]}...</h1>"
-
+def debug_banco(): return f"Banco: {app.config['SQLALCHEMY_DATABASE_URI'].split('@')[0]}"
 @app.route('/setup_banco_magico')
 def setup_banco_magico():
-    try:
-        with app.app_context():
-            db.create_all()
-        return "<h1>Sucesso! Tabelas criadas no banco.</h1> <a href='/registro'>Vá cadastrar agora</a>"
-    except Exception as e:
-        return f"<h1>Erro Fatal: {str(e)}</h1>"
+    with app.app_context(): db.create_all()
+    return "Tabelas criadas."
 
-# --- INICIALIZAÇÃO ---
 if __name__ == '__main__':
-    with app.app_context():
-        db.create_all()
+    with app.app_context(): db.create_all()
     app.run(debug=True)
