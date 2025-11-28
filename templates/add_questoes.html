@@ -1,39 +1,165 @@
 ﻿<!DOCTYPE html>
-<html>
-<head><title>Adicionar Questões</title><link href='https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css' rel='stylesheet'></head>
-<body class='container mt-5'>
-    <div class='d-flex justify-content-between'>
-        <h3>Adicionando questões para: {{ prova.titulo }}</h3>
-        <a href='/dashboard' class='btn btn-success'>Finalizar e Voltar</a>
-    </div>
-    <hr>
-    <div class='row'>
-        <div class='col-md-6'>
-            <form method='POST' class='card p-3'>
-                <div class='mb-2'><label>Enunciado</label><textarea name='texto' class='form-control' required></textarea></div>
-                <div class='row'>
-                    <div class='col-6 mb-2'><input type='text' name='opcao_a' class='form-control' placeholder='Opção A' required></div>
-                    <div class='col-6 mb-2'><input type='text' name='opcao_b' class='form-control' placeholder='Opção B' required></div>
-                    <div class='col-6 mb-2'><input type='text' name='opcao_c' class='form-control' placeholder='Opção C' required></div>
-                    <div class='col-6 mb-2'><input type='text' name='opcao_d' class='form-control' placeholder='Opção D' required></div>
-                </div>
-                <div class='mb-3'>
-                    <label>Resposta Correta:</label>
-                    <select name='correta' class='form-select'>
-                        <option value='a'>A</option><option value='b'>B</option><option value='c'>C</option><option value='d'>D</option>
-                    </select>
-                </div>
-                <button type='submit' class='btn btn-primary w-100'>Adicionar Questão</button>
-            </form>
+<html lang="pt-br">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gerenciar Questões</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
+</head>
+
+<body class="bg-light">
+    <!-- Navbar -->
+    <nav class="navbar navbar-dark bg-dark mb-4 shadow-sm">
+        <div class="container">
+            <span class="navbar-brand h1 mb-0">
+                <i class="bi bi-pencil-square me-2"></i> Editor de Prova
+            </span>
+            <a href="/dashboard" class="btn btn-outline-light btn-sm">Voltar ao Painel</a>
         </div>
-        <div class='col-md-6'>
-            <h5>Questões já cadastradas:</h5>
-            <ul class='list-group'>
-                {% for q in prova.questoes %}
-                <li class='list-group-item'>{{ loop.index }}. {{ q.texto }} (Gabarito: {{ q.correta }})</li>
-                {% endfor %}
-            </ul>
+    </nav>
+
+    <div class="container pb-5">
+
+        <!-- MENSAGENS DE FEEDBACK -->
+        {% with messages = get_flashed_messages() %}
+        {% if messages %}
+        <div class="alert alert-info alert-dismissible fade show" role="alert">
+            {{ messages[0] }}
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        </div>
+        {% endif %}
+        {% endwith %}
+
+        <div class="row g-4">
+            <!-- COLUNA DA ESQUERDA: Ferramentas (IA e Manual) -->
+            <div class="col-lg-5">
+
+                <!-- 1. CARD DE INTELIGÊNCIA ARTIFICIAL (O BOTÃO ROXO) -->
+                <div class="card border-0 shadow-sm mb-4"
+                    style="background: linear-gradient(135deg, #6610f2 0%, #6f42c1 100%); color: white;">
+                    <div class="card-body text-center p-4">
+                        <i class="bi bi-robot fs-1 mb-2"></i>
+                        <h4 class="fw-bold">Gerar com IA</h4>
+                        <p class="small opacity-75">Suba um PDF e a IA cria as questões automaticamente.</p>
+
+                        <!-- Formulário para enviar o PDF -->
+                        <form action="/gerar_com_ia/{{ prova.id }}" method="POST" enctype="multipart/form-data"
+                            class="mt-3">
+                            <input type="file" name="arquivo" class="form-control mb-3" accept="application/pdf"
+                                required>
+                            <button type="submit" class="btn btn-light text-primary w-100 fw-bold shadow-sm">
+                                <i class="bi bi-stars me-2"></i> Gerar Questões Mágicas
+                            </button>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- 2. CARD MANUAL (ADICIONAR UMA POR UMA) -->
+                <div class="card border-0 shadow-sm sticky-top" style="top: 20px;">
+                    <div class="card-header bg-primary text-white">
+                        <h5 class="mb-0"><i class="bi bi-plus-circle me-2"></i>Adicionar Manualmente</h5>
+                    </div>
+                    <div class="card-body">
+                        <form method="POST">
+                            <div class="mb-3">
+                                <label class="form-label fw-bold">Enunciado</label>
+                                <textarea name="texto" class="form-control" rows="3"
+                                    placeholder="Digite a pergunta aqui..." required></textarea>
+                            </div>
+                            <div class="row g-2 mb-3">
+                                <div class="col-6">
+                                    <div class="input-group">
+                                        <span class="input-group-text fw-bold">A</span>
+                                        <input type="text" name="opcao_a" class="form-control" placeholder="Opção A"
+                                            required>
+                                    </div>
+                                </div>
+                                <div class="col-6">
+                                    <div class="input-group">
+                                        <span class="input-group-text fw-bold">B</span>
+                                        <input type="text" name="opcao_b" class="form-control" placeholder="Opção B"
+                                            required>
+                                    </div>
+                                </div>
+                                <div class="col-6">
+                                    <div class="input-group">
+                                        <span class="input-group-text fw-bold">C</span>
+                                        <input type="text" name="opcao_c" class="form-control" placeholder="Opção C"
+                                            required>
+                                    </div>
+                                </div>
+                                <div class="col-6">
+                                    <div class="input-group">
+                                        <span class="input-group-text fw-bold">D</span>
+                                        <input type="text" name="opcao_d" class="form-control" placeholder="Opção D"
+                                            required>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="mb-3">
+                                <label class="fw-bold text-success">Resposta Correta:</label>
+                                <select name="correta" class="form-select border-success" required>
+                                    <option value="" disabled selected>Selecione...</option>
+                                    <option value="a">Opção A</option>
+                                    <option value="b">Opção B</option>
+                                    <option value="c">Opção C</option>
+                                    <option value="d">Opção D</option>
+                                </select>
+                            </div>
+                            <button type="submit" class="btn btn-primary w-100 shadow-sm">Salvar Questão</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+
+            <!-- COLUNA DA DIREITA: Lista de Questões -->
+            <div class="col-lg-7">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h4 class="text-secondary fw-bold mb-0">Questões da Prova</h4>
+                    <span class="badge bg-secondary">{{ prova.questoes|length }} cadastradas</span>
+                </div>
+
+                <div class="d-flex flex-column gap-3">
+                    {% for q in prova.questoes %}
+                    <div class="card border-0 shadow-sm">
+                        <div class="card-body">
+                            <div class="d-flex justify-content-between align-items-start mb-2">
+                                <h6 class="fw-bold text-primary mb-0">Questão {{ loop.index }}</h6>
+                                <!-- Botão de Excluir Questão -->
+                                <a href="/excluir_questao/{{ q.id }}" class="btn btn-outline-danger btn-sm border-0"
+                                    onclick="return confirm('Tem certeza que deseja apagar esta questão?')">
+                                    <i class="bi bi-trash-fill"></i>
+                                </a>
+                            </div>
+                            <p class="mb-3">{{ q.texto }}</p>
+                            <div class="small text-muted border-top pt-2">
+                                <div class="row">
+                                    <div class="col-6 {% if q.correta=='a' %}text-success fw-bold{% endif %}">A) {{
+                                        q.opcao_a }}</div>
+                                    <div class="col-6 {% if q.correta=='b' %}text-success fw-bold{% endif %}">B) {{
+                                        q.opcao_b }}</div>
+                                    <div class="col-6 {% if q.correta=='c' %}text-success fw-bold{% endif %}">C) {{
+                                        q.opcao_c }}</div>
+                                    <div class="col-6 {% if q.correta=='d' %}text-success fw-bold{% endif %}">D) {{
+                                        q.opcao_d }}</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    {% else %}
+                    <div class="text-center py-5 bg-white rounded border border-dashed text-muted">
+                        <i class="bi bi-clipboard-plus fs-1"></i>
+                        <p class="mt-2">Nenhuma questão cadastrada.</p>
+                        <p class="small">Use a IA ao lado ou adicione manualmente.</p>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
         </div>
     </div>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
+
 </html>
