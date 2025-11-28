@@ -1,0 +1,39 @@
+﻿<!DOCTYPE html>
+<html>
+<head><title>Adicionar Questões</title><link href='https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css' rel='stylesheet'></head>
+<body class='container mt-5'>
+    <div class='d-flex justify-content-between'>
+        <h3>Adicionando questões para: {{ prova.titulo }}</h3>
+        <a href='/dashboard' class='btn btn-success'>Finalizar e Voltar</a>
+    </div>
+    <hr>
+    <div class='row'>
+        <div class='col-md-6'>
+            <form method='POST' class='card p-3'>
+                <div class='mb-2'><label>Enunciado</label><textarea name='texto' class='form-control' required></textarea></div>
+                <div class='row'>
+                    <div class='col-6 mb-2'><input type='text' name='opcao_a' class='form-control' placeholder='Opção A' required></div>
+                    <div class='col-6 mb-2'><input type='text' name='opcao_b' class='form-control' placeholder='Opção B' required></div>
+                    <div class='col-6 mb-2'><input type='text' name='opcao_c' class='form-control' placeholder='Opção C' required></div>
+                    <div class='col-6 mb-2'><input type='text' name='opcao_d' class='form-control' placeholder='Opção D' required></div>
+                </div>
+                <div class='mb-3'>
+                    <label>Resposta Correta:</label>
+                    <select name='correta' class='form-select'>
+                        <option value='a'>A</option><option value='b'>B</option><option value='c'>C</option><option value='d'>D</option>
+                    </select>
+                </div>
+                <button type='submit' class='btn btn-primary w-100'>Adicionar Questão</button>
+            </form>
+        </div>
+        <div class='col-md-6'>
+            <h5>Questões já cadastradas:</h5>
+            <ul class='list-group'>
+                {% for q in prova.questoes %}
+                <li class='list-group-item'>{{ loop.index }}. {{ q.texto }} (Gabarito: {{ q.correta }})</li>
+                {% endfor %}
+            </ul>
+        </div>
+    </div>
+</body>
+</html>

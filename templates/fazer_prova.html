@@ -1,0 +1,49 @@
+﻿<!DOCTYPE html>
+<html>
+<head><title>Prova</title><link href='https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css' rel='stylesheet'></head>
+<body class='container mt-4'>
+    <div class='d-flex justify-content-between align-items-center mb-4 sticky-top bg-white py-2 border-bottom'>
+        <h2>{{ prova.titulo }}</h2>
+        <div class='alert alert-danger mb-0 py-2' id='timer' style='font-weight:bold;'>30:00</div>
+    </div>
+    <form method='POST' id='formProva'>
+        {% for questao in prova.questoes %}
+        <div class='card mb-4 shadow-sm'>
+            <div class='card-body'>
+                <h5 class='card-title'>Questão {{ loop.index }}</h5>
+                <p class='card-text lead'>{{ questao.texto }}</p>
+                <div class='btn-group-vertical w-100' role='group'>
+                    <input type='radio' class='btn-check' name='q_{{ questao.id }}' id='q{{ questao.id }}a' value='a' autocomplete='off'>
+                    <label class='btn btn-outline-primary text-start' for='q{{ questao.id }}a'>A) {{ questao.opcao_a }}</label>
+
+                    <input type='radio' class='btn-check' name='q_{{ questao.id }}' id='q{{ questao.id }}b' value='b' autocomplete='off'>
+                    <label class='btn btn-outline-primary text-start' for='q{{ questao.id }}b'>B) {{ questao.opcao_b }}</label>
+
+                    <input type='radio' class='btn-check' name='q_{{ questao.id }}' id='q{{ questao.id }}c' value='c' autocomplete='off'>
+                    <label class='btn btn-outline-primary text-start' for='q{{ questao.id }}c'>C) {{ questao.opcao_c }}</label>
+
+                    <input type='radio' class='btn-check' name='q_{{ questao.id }}' id='q{{ questao.id }}d' value='d' autocomplete='off'>
+                    <label class='btn btn-outline-primary text-start' for='q{{ questao.id }}d'>D) {{ questao.opcao_d }}</label>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+        <button type='submit' class='btn btn-success btn-lg w-100 mb-5'>ENVIAR RESPOSTAS</button>
+    </form>
+    <script>
+        let tempo = 30 * 60; // 30 minutos em segundos
+        const display = document.querySelector('#timer');
+        const interval = setInterval(() => {
+            const min = Math.floor(tempo / 60);
+            const sec = tempo % 60;
+            display.textContent = Tempo: :;
+            tempo--;
+            if (tempo < 0) {
+                clearInterval(interval);
+                alert('O TEMPO ACABOU! Enviando prova...');
+                document.getElementById('formProva').submit();
+            }
+        }, 1000);
+    </script>
+</body>
+</html>
