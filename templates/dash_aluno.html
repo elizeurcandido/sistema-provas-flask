@@ -12,29 +12,47 @@
         <a href='/logout' class='btn btn-light btn-sm'>Sair</a>
     </nav>
     <div class='container'>
+        {% with messages = get_flashed_messages() %}
+        {% if messages %}<div class='alert alert-warning'>{{ messages[0] }}</div>{% endif %}
+        {% endwith %}
+
         <div class='row'>
             <div class='col-md-8'>
                 <h3>Provas Disponíveis</h3>
                 <div class='list-group mt-3'>
                     {% for prova in provas %}
-                    <a href='/fazer_prova/{{ prova.id }}'
-                        class='list-group-item list-group-item-action d-flex justify-content-between align-items-center'>
+                    <div class='list-group-item d-flex justify-content-between align-items-center'>
                         {{ prova.titulo }}
-                        <span class='badge bg-success rounded-pill'>Iniciar</span>
-                    </a>
+
+                        {% if prova.id in ids_feitas %}
+                        <button class='btn btn-secondary btn-sm' disabled>Já Realizada</button>
+                        {% else %}
+                        <a href='/fazer_prova/{{ prova.id }}' class='btn btn-success btn-sm'>Iniciar Prova</a>
+                        {% endif %}
+                    </div>
                     {% else %}
-                    <p>Nenhuma prova disponível no momento.</p>
+                    <p>Nenhuma prova disponível.</p>
                     {% endfor %}
                 </div>
             </div>
+
             <div class='col-md-4'>
                 <div class='card'>
-                    <div class='card-header bg-warning'>Histórico de Notas</div>
+                    <div class='card-header bg-warning'>Histórico e Certificados</div>
                     <ul class='list-group list-group-flush'>
                         {% for res in resultados %}
-                        <li class='list-group-item d-flex justify-content-between'>
-                            <span>Prova #{{ res.prova_id }}</span>
-                            <strong>{{ "%.1f"|format(res.nota) }}</strong>
+                        <li class='list-group-item'>
+                            <div class="d-flex justify-content-between">
+                                <span>Prova #{{ res.prova_id }}</span>
+                                <strong>Nota: {{ "%.1f"|format(res.nota) }}</strong>
+                            </div>
+
+                            {% if res.nota >= 7.0 %}
+                            <div class="mt-2 text-end">
+                                <a href="/certificado/{{ res.id }}" class="btn btn-outline-primary btn-sm">🏆 Baixar
+                                    Certificado</a>
+                            </div>
+                            {% endif %}
                         </li>
                         {% else %}
                         <li class='list-group-item'>Nenhum resultado ainda.</li>
