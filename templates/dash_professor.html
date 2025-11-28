@@ -1,29 +1,101 @@
 ﻿<!DOCTYPE html>
-<html>
-<head><title>Painel do Professor</title><link href='https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css' rel='stylesheet'></head>
-<body class='bg-light'>
-    <nav class='navbar navbar-dark bg-dark p-3 mb-4'>
-        <span class='navbar-brand'>Painel do Professor: {{ current_user.nome }}</span>
-        <a href='/logout' class='btn btn-outline-light btn-sm'>Sair</a>
-    </nav>
-    <div class='container'>
-        <div class='d-flex justify-content-between align-items-center mb-3'>
-            <h3>Minhas Provas Criadas</h3>
-            <a href='/criar_prova' class='btn btn-primary'>+ Nova Prova</a>
+<html lang="pt-br">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Painel do Professor</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .card-hover:hover {
+            transform: translateY(-3px);
+            transition: transform 0.2s;
+            box-shadow: 0 .5rem 1rem rgba(0, 0, 0, .15) !important;
+        }
+    </style>
+</head>
+
+<body class="bg-light">
+    <!-- Navbar -->
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4 shadow-sm">
+        <div class="container">
+            <span class="navbar-brand mb-0 h1">👨‍🏫 Professor: {{ current_user.nome }}</span>
+            <div class="d-flex">
+                <a href="/logout" class="btn btn-outline-light btn-sm">Sair</a>
+            </div>
         </div>
-        <div class='list-group'>
+    </nav>
+
+    <div class="container">
+        <!-- Área de Mensagens (Flash) -->
+        {% with messages = get_flashed_messages() %}
+        {% if messages %}
+        <div class="alert alert-warning alert-dismissible fade show" role="alert">
+            {{ messages[0] }}
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        </div>
+        {% endif %}
+        {% endwith %}
+
+        <!-- Cabeçalho e Botão Criar -->
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <div>
+                <h2 class="fw-bold text-dark">Gerenciar Provas</h2>
+                <p class="text-muted">Acompanhe o desempenho das suas turmas</p>
+            </div>
+            <a href="/criar_prova" class="btn btn-primary btn-lg shadow">
+                <span class="fs-5">+</span> Criar Nova Prova
+            </a>
+        </div>
+
+        <!-- Lista de Provas (Cards) -->
+        <div class="row">
             {% for prova in provas %}
-            <div class='list-group-item d-flex justify-content-between align-items-center'>
-                <div>
-                    <h5 class='mb-1'>{{ prova.titulo }}</h5>
-                    <small>ID: {{ prova.id }} | Questões: {{ prova.questoes|length }}</small>
+            <div class="col-md-6 mb-4">
+                <div class="card h-100 shadow-sm border-0 card-hover">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-start mb-2">
+                            <h5 class="card-title fw-bold text-primary">{{ prova.titulo }}</h5>
+                            <span class="badge bg-secondary">ID: {{ prova.id }}</span>
+                        </div>
+                        <p class="card-text text-muted mb-4">
+                            Questões cadastradas: <strong>{{ prova.questoes|length }}</strong>
+                        </p>
+
+                        <!-- Botões de Ação -->
+                        <div class="d-grid gap-2 d-md-block">
+                            <a href="/ver_notas/{{ prova.id }}" class="btn btn-info btn-sm text-white mb-1">
+                                📊 Ver Notas
+                            </a>
+                            <a href="/exportar_excel/{{ prova.id }}" class="btn btn-success btn-sm mb-1">
+                                📥 Baixar Excel
+                            </a>
+                            <a href="/adicionar_questoes/{{ prova.id }}" class="btn btn-outline-secondary btn-sm mb-1">
+                                ✏️ Editar
+                            </a>
+                            <a href="/excluir_prova/{{ prova.id }}" class="btn btn-outline-danger btn-sm mb-1"
+                                onclick="return confirm('ATENÇÃO: Isso apagará a prova e TODAS as notas dos alunos. Tem certeza?')">
+                                🗑️ Excluir
+                            </a>
+                        </div>
+                    </div>
                 </div>
-                <a href='/adicionar_questoes/{{ prova.id }}' class='btn btn-sm btn-outline-secondary'>Editar/Add Questões</a>
             </div>
             {% else %}
-            <div class='alert alert-info'>Você ainda não criou nenhuma prova.</div>
+            <!-- Estado Vazio -->
+            <div class="col-12 mt-4">
+                <div class="text-center py-5 bg-white rounded shadow-sm">
+                    <h4 class="text-muted">Você ainda não criou nenhuma prova.</h4>
+                    <p class="mb-4">Comece criando sua primeira avaliação para os alunos.</p>
+                    <a href="/criar_prova" class="btn btn-primary">Começar Agora</a>
+                </div>
+            </div>
             {% endfor %}
         </div>
     </div>
+
+    <!-- Script do Bootstrap (necessário para fechar alertas) -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
+
 </html>

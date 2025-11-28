@@ -1,15 +1,18 @@
 import os
+import io
+import pandas as pd # Biblioteca para criar o Excel
 from flask import Flask, render_template, redirect, url_for, request, flash, make_response
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
-from fpdf import FPDF
+from fpdf import FPDF 
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'chave_super_secreta_seguranca_total'
 
-# --- BANCO DE DADOS ---
+# --- CONFIGURAÇÃO DO BANCO DE DADOS (HÍBRIDO) ---
+# Tenta pegar a URL do banco do Render. Se não achar, usa SQLite local.
 uri = os.getenv("DATABASE_URL")
 if uri and uri.startswith("postgres://"):
     uri = uri.replace("postgres://", "postgresql://", 1)
@@ -22,22 +25,22 @@ login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
 
-# --- MODELOS (TABELAS RENOMEADAS PARA POSTGRES) ---
+# --- MODELOS (TABELAS) ---
+# Usamos prefixo tb_ para evitar conflito com nomes reservados do Postgres
 class User(UserMixin, db.Model):
-    __tablename__ = 'tb_usuarios'  # Nome seguro para o PostgreSQL
+    __tablename__ = 'tb_usuarios' 
     id = db.Column(db.Integer, primary_key=True)
     nome = db.Column(db.String(100), nullable=False)
     email = db.Column(db.String(100), unique=True, nullable=False)
     senha = db.Column(db.String(200), nullable=False)
     is_professor = db.Column(db.Boolean, default=False)
-    # Relacionamento
     resultados = db.relationship('Resultado', backref='aluno', lazy=True)
 
 class Prova(db.Model):
     __tablename__ = 'tb_provas'
     id = db.Column(db.Integer, primary_key=True)
     titulo = db.Column(db.String(150), nullable=False)
-    criado_por = db.Column(db.Integer, db.ForeignKey('tb_usuarios.id')) # Referencia a tabela nova
+    criado_por = db.Column(db.Integer, db.ForeignKey('tb_usuarios.id'))
     questoes = db.relationship('Questao', backref='prova', lazy=True, cascade="all, delete-orphan")
 
 class Questao(db.Model):
@@ -63,7 +66,7 @@ class Resultado(db.Model):
 def load_user(user_id):
     return User.query.get(int(user_id))
 
-# --- ROTAS ---
+# --- ROTAS PRINCIPAIS ---
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -105,10 +108,10 @@ def dashboard():
         provas = Prova.query.filter_by(criado_por=current_user.id).all()
         return render_template('dash_professor.html', provas=provas)
     else:
-        # Logica: Pegar todas as provas e marcar quais o aluno ja fez
+        # Pega provas e histórico para o aluno
         provas = Prova.query.all()
         meus_resultados = Resultado.query.filter_by(aluno_id=current_user.id).all()
-        ids_feitas = [r.prova_id for r in meus_resultados] # Lista de IDs que ele ja fez
+        ids_feitas = [r.prova_id for r in meus_resultados]
         return render_template('dash_aluno.html', provas=provas, resultados=meus_resultados, ids_feitas=ids_feitas)
 
 @app.route('/criar_prova', methods=['GET', 'POST'])
@@ -144,7 +147,7 @@ def adicionar_questoes(prova_id):
 @app.route('/fazer_prova/<int:prova_id>', methods=['GET', 'POST'])
 @login_required
 def fazer_prova(prova_id):
-    # REGRA DE NEGOCIO: Bloquear se ja fez
+    # Bloqueia se já fez
     ja_fez = Resultado.query.filter_by(aluno_id=current_user.id, prova_id=prova_id).first()
     if ja_fez:
         flash('Você já realizou esta prova!')
@@ -171,11 +174,13 @@ def logout():
     logout_user()
     return redirect(url_for('index'))
 
+# --- FUNCIONALIDADES AVANÇADAS ---
+
+# 1. Gerador de Certificado PDF
 @app.route('/certificado/<int:resultado_id>')
 @login_required
 def gerar_certificado(resultado_id):
     res = Resultado.query.get(resultado_id)
-    # Seguranca: so o dono pode baixar e apenas se nota >= 7
     if res.aluno_id != current_user.id or res.nota < 7.0:
         flash("Certificado indisponível.")
         return redirect(url_for('dashboard'))
@@ -200,39 +205,73 @@ def gerar_certificado(resultado_id):
     response.headers['Content-Disposition'] = f'attachment; filename=certificado_{res.id}.pdf'
     return response
 
-# --- NOVAS FUNCIONALIDADES (Aprimoramento) ---
+# 2. Excluir Prova (Professor)
 @app.route('/excluir_prova/<int:prova_id>')
 @login_required
 def excluir_prova(prova_id):
     prova = Prova.query.get(prova_id)
-    
     # Segurança: Só o dono pode apagar
     if not prova or prova.criado_por != current_user.id:
         flash('Erro: Você não tem permissão para excluir esta prova.')
         return redirect(url_for('dashboard'))
     
-    # Apagar primeiro os resultados associados (Limpeza)
+    # Limpa resultados antigos dessa prova antes de apagar
     Resultado.query.filter_by(prova_id=prova_id).delete()
-    
     db.session.delete(prova)
     db.session.commit()
     flash('Prova excluída com sucesso!')
     return redirect(url_for('dashboard'))
 
+# 3. Ver Notas da Turma (Professor)
 @app.route('/ver_notas/<int:prova_id>')
 @login_required
 def ver_notas(prova_id):
     prova = Prova.query.get(prova_id)
-    
     if not prova or prova.criado_por != current_user.id:
         return redirect(url_for('dashboard'))
     
-    # Busca todos os resultados desta prova específica
     resultados = Resultado.query.filter_by(prova_id=prova_id).all()
-    
     return render_template('ver_notas.html', prova=prova, resultados=resultados)
 
-# --- ROTAS DE DIAGNÓSTICO E SETUP ---
+# 4. Exportar Excel (Professor)
+@app.route('/exportar_excel/<int:prova_id>')
+@login_required
+def exportar_excel(prova_id):
+    prova = Prova.query.get(prova_id)
+    if not prova or prova.criado_por != current_user.id:
+        flash('Acesso negado.')
+        return redirect(url_for('dashboard'))
+    
+    resultados = Resultado.query.filter_by(prova_id=prova_id).all()
+    
+    # Monta a lista de dados
+    dados = []
+    for res in resultados:
+        dados.append({
+            'Nome do Aluno': res.aluno.nome,
+            'Email': res.aluno.email,
+            'Data de Envio': res.data_envio.strftime('%d/%m/%Y %H:%M'),
+            'Nota': res.nota,
+            'Status': 'Aprovado' if res.nota >= 7.0 else 'Reprovado'
+        })
+    
+    if not dados:
+        flash('Nenhum dado para exportar.')
+        return redirect(url_for('ver_notas', prova_id=prova.id))
+
+    # Cria o DataFrame e o arquivo Excel na memória
+    df = pd.DataFrame(dados)
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='Notas')
+    output.seek(0)
+    
+    return make_response(output.read(), 200, {
+        'Content-Disposition': f'attachment; filename=notas_{prova.titulo}.xlsx',
+        'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    })
+
+# --- ROTAS TÉCNICAS (Diagnóstico e Setup) ---
 @app.route('/debug_banco')
 def debug_banco():
     banco = app.config['SQLALCHEMY_DATABASE_URI']
@@ -244,10 +283,11 @@ def setup_banco_magico():
     try:
         with app.app_context():
             db.create_all()
-        return "<h1>Sucesso! Tabelas criadas.</h1> <a href='/registro'>Vá cadastrar</a>"
+        return "<h1>Sucesso! Tabelas criadas no banco.</h1> <a href='/registro'>Vá cadastrar agora</a>"
     except Exception as e:
         return f"<h1>Erro Fatal: {str(e)}</h1>"
 
+# --- INICIALIZAÇÃO ---
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
