@@ -1,12 +1,194 @@
 ﻿<!DOCTYPE html>
-<html>
-<head><title>Resultado</title><link href='https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css' rel='stylesheet'></head>
-<body class='d-flex align-items-center justify-content-center vh-100 bg-light'>
-    <div class='text-center p-5 bg-white shadow rounded'>
-        <h1 class='display-1 mb-4'>Nota: {{ "%.1f"|format(nota) }}</h1>
-        <p class='lead'>Você acertou <strong>{{ acertos }}</strong> de <strong>{{ total }}</strong> questões.</p>
-        <hr>
-        <a href='/dashboard' class='btn btn-primary btn-lg mt-3'>Voltar ao Painel</a>
+<html lang="pt-br">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Resultado da Prova</title>
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Bootstrap Icons -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
+
+    <style>
+        .card-result {
+            transition: transform 0.3s;
+        }
+
+        .card-result:hover {
+            transform: translateY(-5px);
+        }
+
+        /* Estilos suaves para feedback */
+        .bg-success-soft {
+            background-color: #d1e7dd;
+            border-left: 5px solid #198754;
+        }
+
+        .bg-danger-soft {
+            background-color: #f8d7da;
+            border-left: 5px solid #dc3545;
+        }
+
+        /* Estilos das opções */
+        .option-box {
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 8px;
+            background-color: #fff;
+            opacity: 0.8;
+        }
+
+        /* Opção Certa (Sempre verde) */
+        .option-correct {
+            background-color: #d1e7dd;
+            border-color: #198754;
+            color: #0f5132;
+            opacity: 1;
+            font-weight: bold;
+        }
+
+        /* Opção Errada (Marcada pelo aluno) */
+        .option-wrong {
+            background-color: #f8d7da;
+            border-color: #dc3545;
+            color: #842029;
+            opacity: 1;
+            text-decoration: line-through;
+        }
+    </style>
+</head>
+
+<body class="bg-light py-5">
+    <div class="container" style="max-width: 800px;">
+
+        <!-- CARD DE CABEÇALHO (NOTA E STATUS) -->
+        <div class="card shadow-lg border-0 mb-5 text-center overflow-hidden">
+            <div class="card-header py-4 {% if nota >= 7 %}bg-success{% else %}bg-danger{% endif %} text-white">
+                <h5 class="mb-0 text-uppercase ls-1">Resultado Final</h5>
+            </div>
+            <div class="card-body p-5">
+                <h1 class="display-1 fw-bold {% if nota >= 7 %}text-success{% else %}text-danger{% endif %} mb-0">
+                    {{ "%.1f"|format(nota) }}
+                </h1>
+                <p class="text-muted fs-5 mb-4">
+                    Você acertou <strong>{{ acertos }}</strong> de <strong>{{ total }}</strong> questões.
+                </p>
+
+                <div class="d-flex justify-content-center gap-3 flex-wrap">
+                    <a href="/dashboard" class="btn btn-outline-secondary btn-lg">
+                        <i class="bi bi-house-door-fill"></i> Voltar ao Painel
+                    </a>
+
+                    <!-- Botão de Certificado (Só aparece se aprovado) -->
+                    {% if nota >= 7 %}
+                    <a href="/certificado/{{ resultado_id }}"
+                        class="btn btn-warning btn-lg shadow-sm text-dark fw-bold">
+                        <i class="bi bi-trophy-fill me-2"></i> Baixar Certificado
+                    </a>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <div class="d-flex align-items-center mb-4">
+            <h4 class="fw-bold text-secondary mb-0"><i class="bi bi-list-check me-2"></i>Gabarito Detalhado</h4>
+            <span class="ms-auto badge bg-secondary">Revisão da Prova</span>
+        </div>
+
+        <!-- LOOP DE QUESTÕES (GABARITO) -->
+        {% for item in gabarito %}
+        <div class="card border-0 shadow-sm mb-4 card-result">
+            <div class="card-body p-4 {% if item.acertou %}bg-success-soft{% else %}bg-danger-soft{% endif %}">
+
+                <!-- Cabeçalho da Questão -->
+                <div class="d-flex justify-content-between align-items-start mb-3">
+                    <h5 class="fw-bold text-dark mb-0">Questão {{ loop.index }}</h5>
+                    {% if item.acertou %}
+                    <span class="badge bg-success"><i class="bi bi-check-lg"></i> Acertou</span>
+                    {% else %}
+                    <span class="badge bg-danger"><i class="bi bi-x-lg"></i> Errou</span>
+                    {% endif %}
+                </div>
+
+                <p class="fs-5 mb-4 text-dark">{{ item.enunciado }}</p>
+
+                <!-- Lista de Opções com Feedback Visual -->
+                <div class="d-flex flex-column gap-2">
+
+                    <!-- OPÇÃO A -->
+                    <div class="option-box 
+                        {% if item.correta == 'a' %}option-correct{% endif %} 
+                        {% if item.marcada == 'a' and not item.acertou %}option-wrong{% endif %}">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <span><span class="fw-bold me-2">A)</span> {{ item.opcao_a }}</span>
+                            {% if item.correta == 'a' %}<i class="bi bi-check-circle-fill fs-5"></i>{% endif %}
+                            {% if item.marcada == 'a' and not item.acertou %}<i class="bi bi-x-circle-fill fs-5"></i>{%
+                            endif %}
+                        </div>
+                    </div>
+
+                    <!-- OPÇÃO B -->
+                    <div class="option-box 
+                        {% if item.correta == 'b' %}option-correct{% endif %} 
+                        {% if item.marcada == 'b' and not item.acertou %}option-wrong{% endif %}">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <span><span class="fw-bold me-2">B)</span> {{ item.opcao_b }}</span>
+                            {% if item.correta == 'b' %}<i class="bi bi-check-circle-fill fs-5"></i>{% endif %}
+                            {% if item.marcada == 'b' and not item.acertou %}<i class="bi bi-x-circle-fill fs-5"></i>{%
+                            endif %}
+                        </div>
+                    </div>
+
+                    <!-- OPÇÃO C -->
+                    <div class="option-box 
+                        {% if item.correta == 'c' %}option-correct{% endif %} 
+                        {% if item.marcada == 'c' and not item.acertou %}option-wrong{% endif %}">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <span><span class="fw-bold me-2">C)</span> {{ item.opcao_c }}</span>
+                            {% if item.correta == 'c' %}<i class="bi bi-check-circle-fill fs-5"></i>{% endif %}
+                            {% if item.marcada == 'c' and not item.acertou %}<i class="bi bi-x-circle-fill fs-5"></i>{%
+                            endif %}
+                        </div>
+                    </div>
+
+                    <!-- OPÇÃO D -->
+                    <div class="option-box 
+                        {% if item.correta == 'd' %}option-correct{% endif %} 
+                        {% if item.marcada == 'd' and not item.acertou %}option-wrong{% endif %}">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <span><span class="fw-bold me-2">D)</span> {{ item.opcao_d }}</span>
+                            {% if item.correta == 'd' %}<i class="bi bi-check-circle-fill fs-5"></i>{% endif %}
+                            {% if item.marcada == 'd' and not item.acertou %}<i class="bi bi-x-circle-fill fs-5"></i>{%
+                            endif %}
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Mensagem de Feedback se Errou -->
+                {% if not item.acertou %}
+                <div class="mt-3 p-3 bg-white rounded border border-danger text-danger d-flex align-items-center gap-2">
+                    <i class="bi bi-info-circle-fill fs-4"></i>
+                    <div>
+                        Você marcou a opção <strong>{{ item.marcada|upper }}</strong>, mas a resposta correta era a
+                        <strong>{{ item.correta|upper }}</strong>.
+                    </div>
+                </div>
+                {% endif %}
+
+            </div>
+        </div>
+        {% endfor %}
+
+        <div class="text-center mt-5 mb-5">
+            <a href="/dashboard" class="btn btn-secondary">Voltar ao Painel</a>
+        </div>
+
     </div>
+
+    <!-- Script Bootstrap -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
+
 </html>
