@@ -4,15 +4,17 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
-from fpdf import FPDF # Importacao nova
+from fpdf import FPDF 
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'chave_super_secreta_seguranca_total'
 
-# Banco de dados Hibrido
+# --- CONFIGURAÇÃO DO BANCO DE DADOS (HÍBRIDO) ---
+# Tenta pegar a URL do banco do Render. Se não achar, usa SQLite local.
 uri = os.getenv("DATABASE_URL")
 if uri and uri.startswith("postgres://"):
     uri = uri.replace("postgres://", "postgresql://", 1)
+
 app.config['SQLALCHEMY_DATABASE_URI'] = uri or 'sqlite:///escola.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
@@ -21,7 +23,7 @@ login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
 
-# --- MODELOS ---
+# --- MODELOS (TABELAS) ---
 class User(UserMixin, db.Model):
     id = db.Column(db.Integer, primary_key=True)
     nome = db.Column(db.String(100), nullable=False)
@@ -57,7 +59,7 @@ class Resultado(db.Model):
 def load_user(user_id):
     return User.query.get(int(user_id))
 
-# --- ROTAS ---
+# --- ROTAS PRINCIPAIS ---
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -99,10 +101,10 @@ def dashboard():
         provas = Prova.query.filter_by(criado_por=current_user.id).all()
         return render_template('dash_professor.html', provas=provas)
     else:
-        # Logica: Pegar todas as provas e marcar quais o aluno ja fez
+        # Pega provas e histórico
         provas = Prova.query.all()
         meus_resultados = Resultado.query.filter_by(aluno_id=current_user.id).all()
-        ids_feitas = [r.prova_id for r in meus_resultados] # Lista de IDs que ele ja fez
+        ids_feitas = [r.prova_id for r in meus_resultados]
         return render_template('dash_aluno.html', provas=provas, resultados=meus_resultados, ids_feitas=ids_feitas)
 
 @app.route('/criar_prova', methods=['GET', 'POST'])
@@ -138,7 +140,7 @@ def adicionar_questoes(prova_id):
 @app.route('/fazer_prova/<int:prova_id>', methods=['GET', 'POST'])
 @login_required
 def fazer_prova(prova_id):
-    # REGRA DE NEGOCIO: Bloquear se ja fez
+    # Bloqueia se já fez
     ja_fez = Resultado.query.filter_by(aluno_id=current_user.id, prova_id=prova_id).first()
     if ja_fez:
         flash('Você já realizou esta prova!')
@@ -165,12 +167,12 @@ def logout():
     logout_user()
     return redirect(url_for('index'))
 
-# --- NOVIDADE: GERADOR DE CERTIFICADO ---
+# --- GERADOR DE CERTIFICADO PDF ---
 @app.route('/certificado/<int:resultado_id>')
 @login_required
 def gerar_certificado(resultado_id):
     res = Resultado.query.get(resultado_id)
-    # Seguranca: so o dono pode baixar e apenas se nota >= 7
+    # Validação: só o dono pode baixar e apenas se nota >= 7
     if res.aluno_id != current_user.id or res.nota < 7.0:
         flash("Certificado indisponível (Nota insuficiente ou acesso negado).")
         return redirect(url_for('dashboard'))
@@ -201,14 +203,32 @@ def gerar_certificado(resultado_id):
     response.headers['Content-Disposition'] = f'attachment; filename=certificado_{res.id}.pdf'
     return response
 
-# Rota magica mantida (mas use com cuidado!)
+# --- ROTA DETETIVE (Verifica qual banco está usando) ---
+@app.route('/debug_banco')
+def debug_banco():
+    banco_atual = app.config['SQLALCHEMY_DATABASE_URI']
+    
+    if 'postgres' in banco_atual:
+        status = "✅ SUCESSO! Você está usando o Banco Profissional (PostgreSQL)."
+        cor = "green"
+    else:
+        status = "❌ PERIGO! Você está usando o Banco Temporário (SQLite). Configure a variável DATABASE_URL no Render."
+        cor = "red"
+        
+    return f"<h1 style='color:{cor}'>{status}</h1><hr><p>Endereço: {banco_atual.split('@')[0]}...</p>"
+
+# --- ROTA PARA CRIAR TABELAS (Setup Inicial) ---
 @app.route('/setup_banco_magico')
 def setup_banco_magico():
     try:
-        with app.app_context(): db.create_all()
-        return "Tabelas verificadas/criadas."
-    except Exception as e: return str(e)
+        with app.app_context():
+            db.create_all()
+        return "<h1>Sucesso! Tabelas criadas.</h1> <a href='/registro'>Vá cadastrar agora</a>"
+    except Exception as e:
+        return f"<h1>Erro: {str(e)}</h1>"
 
+# --- INICIALIZAÇÃO ---
 if __name__ == '__main__':
-    with app.app_context(): db.create_all()
+    with app.app_context():
+        db.create_all()
     app.run(debug=True)
