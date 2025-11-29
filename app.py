@@ -3,7 +3,7 @@ import io
 import json
 import random
 import pandas as pd
-from flask import Flask, render_template, redirect, url_for, request, flash, make_response
+from flask import Flask, render_template, redirect, url_for, request, flash, make_response, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -11,12 +11,22 @@ from datetime import datetime
 from fpdf import FPDF
 from pypdf import PdfReader
 from groq import Groq
+import google.generativeai as genai # Reimportando Gemini para o Tutor
 from sqlalchemy import text 
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'chave_super_secreta_seguranca_total'
 
-# --- CONFIGURAÇÃO DO BANCO DE DADOS ---
+# --- CONFIGURAÇÃO DAS IAs ---
+# Groq para criar provas (Rápido)
+GROQ_API_KEY = os.getenv('GROQ_API_KEY')
+
+# Gemini para explicar erros (Didático)
+GOOGLE_API_KEY = os.getenv('GEMINI_API_KEY')
+if GOOGLE_API_KEY:
+    genai.configure(api_key=GOOGLE_API_KEY)
+
+# --- BANCO DE DADOS ---
 uri = os.getenv("DATABASE_URL")
 if uri and uri.startswith("postgres://"):
     uri = uri.replace("postgres://", "postgresql://", 1)
@@ -50,7 +60,6 @@ class Prova(db.Model):
 class Questao(db.Model):
     __tablename__ = 'tb_questoes'
     id = db.Column(db.Integer, primary_key=True)
-    # USO DE db.Text PARA EVITAR ERRO DE LIMITE DE CARACTERES DA IA
     texto = db.Column(db.Text, nullable=False)
     opcao_a = db.Column(db.Text)
     opcao_b = db.Column(db.Text)
@@ -71,24 +80,23 @@ class Resultado(db.Model):
 def load_user(user_id):
     return User.query.get(int(user_id))
 
-# --- ROTAS PRINCIPAIS ---
+# --- ROTAS GERAIS ---
 @app.route('/')
-def index():
-    return render_template('index.html')
+def index(): return render_template('index.html')
 
 @app.route('/registro', methods=['GET', 'POST'])
 def registro():
     if request.method == 'POST':
-        nome = request.form.get('nome')
-        email = request.form.get('email')
-        senha_crua = request.form.get('senha')
-        tipo = request.form.get('tipo') 
-        user_existente = User.query.filter_by(email=email).first()
+        user_existente = User.query.filter_by(email=request.form.get('email')).first()
         if user_existente:
             flash('Email já cadastrado!')
             return redirect(url_for('registro'))
-        nova_senha = generate_password_hash(senha_crua, method='pbkdf2:sha256')
-        novo_user = User(nome=nome, email=email, senha=nova_senha, is_professor=(tipo=='professor'))
+        novo_user = User(
+            nome=request.form.get('nome'),
+            email=request.form.get('email'),
+            senha=generate_password_hash(request.form.get('senha'), method='pbkdf2:sha256'),
+            is_professor=(request.form.get('tipo') == 'professor')
+        )
         db.session.add(novo_user)
         db.session.commit()
         return redirect(url_for('login'))
@@ -97,10 +105,8 @@ def registro():
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
-        email = request.form.get('email')
-        senha = request.form.get('senha')
-        user = User.query.filter_by(email=email).first()
-        if user and check_password_hash(user.senha, senha):
+        user = User.query.filter_by(email=request.form.get('email')).first()
+        if user and check_password_hash(user.senha, request.form.get('senha')):
             login_user(user)
             return redirect(url_for('dashboard'))
         flash('Login inválido.')
@@ -118,13 +124,19 @@ def dashboard():
         ids_feitas = [r.prova_id for r in meus_resultados]
         return render_template('dash_aluno.html', provas=provas, resultados=meus_resultados, ids_feitas=ids_feitas)
 
+@app.route('/logout')
+@login_required
+def logout():
+    logout_user()
+    return redirect(url_for('index'))
+
+# --- ROTAS DE PROVA (PROFESSOR) ---
 @app.route('/criar_prova', methods=['GET', 'POST'])
 @login_required
 def criar_prova():
     if not current_user.is_professor: return redirect(url_for('dashboard'))
     if request.method == 'POST':
-        titulo = request.form.get('titulo')
-        nova_prova = Prova(titulo=titulo, criado_por=current_user.id, ativa=True)
+        nova_prova = Prova(titulo=request.form.get('titulo'), criado_por=current_user.id, ativa=True)
         db.session.add(nova_prova)
         db.session.commit()
         return redirect(url_for('adicionar_questoes', prova_id=nova_prova.id))
@@ -136,304 +148,238 @@ def adicionar_questoes(prova_id):
     if request.method == 'POST':
         q = Questao(
             texto=request.form.get('texto'),
-            opcao_a=request.form.get('opcao_a'),
-            opcao_b=request.form.get('opcao_b'),
-            opcao_c=request.form.get('opcao_c'),
-            opcao_d=request.form.get('opcao_d'),
-            correta=request.form.get('correta'),
-            prova_id=prova_id
+            opcao_a=request.form.get('opcao_a'), opcao_b=request.form.get('opcao_b'),
+            opcao_c=request.form.get('opcao_c'), opcao_d=request.form.get('opcao_d'),
+            correta=request.form.get('correta'), prova_id=prova_id
         )
         db.session.add(q)
         db.session.commit()
     prova = Prova.query.get(prova_id)
     return render_template('add_questoes.html', prova=prova)
 
-@app.route('/fazer_prova/<int:prova_id>', methods=['GET', 'POST'])
-@login_required
-def fazer_prova(prova_id):
-    prova = Prova.query.get(prova_id)
-    
-    if not prova: return redirect(url_for('dashboard'))
-    if not prova.ativa:
-        flash('Esta prova foi encerrada pelo professor.')
-        return redirect(url_for('dashboard'))
-
-    ja_fez = Resultado.query.filter_by(aluno_id=current_user.id, prova_id=prova_id).first()
-    if ja_fez:
-        flash('Você já realizou esta prova! Veja seu desempenho no histórico.')
-        return redirect(url_for('dashboard'))
-
-    if request.method == 'POST':
-        acertos = 0
-        total = len(prova.questoes)
-        detalhes_gabarito = []
-        for questao in prova.questoes:
-            resposta_aluno = request.form.get(f'q_{questao.id}')
-            acertou = (resposta_aluno == questao.correta)
-            if acertou: acertos += 1
-            detalhes_gabarito.append({
-                'enunciado': questao.texto,
-                'opcao_a': questao.opcao_a, 'opcao_b': questao.opcao_b,
-                'opcao_c': questao.opcao_c, 'opcao_d': questao.opcao_d,
-                'marcada': resposta_aluno, 'correta': questao.correta, 'acertou': acertou
-            })
-        nota_final = (acertos / total) * 10 if total > 0 else 0
-        resultado = Resultado(aluno_id=current_user.id, prova_id=prova.id, nota=nota_final)
-        db.session.add(resultado)
-        db.session.commit()
-        return render_template('resultado.html', nota=nota_final, total=total, acertos=acertos, gabarito=detalhes_gabarito, resultado_id=resultado.id)
-    
-    questoes_embaralhadas = list(prova.questoes)
-    random.shuffle(questoes_embaralhadas)
-    return render_template('fazer_prova.html', prova=prova, questoes=questoes_embaralhadas)
-
-@app.route('/logout')
-@login_required
-def logout():
-    logout_user()
-    return redirect(url_for('index'))
-
-@app.route('/alternar_status/<int:prova_id>')
-@login_required
-def alternar_status(prova_id):
-    prova = Prova.query.get(prova_id)
-    if not prova or prova.criado_por != current_user.id:
-        return redirect(url_for('dashboard'))
-    prova.ativa = not prova.ativa
-    db.session.commit()
-    status_msg = "aberta" if prova.ativa else "fechada"
-    flash(f'Prova {status_msg} com sucesso!')
-    return redirect(url_for('dashboard'))
-
-# --- NOVA FUNCIONALIDADE: DUPLICAR PROVA ---
-@app.route('/duplicar_prova/<int:prova_id>')
-@login_required
-def duplicar_prova(prova_id):
-    prova_original = Prova.query.get(prova_id)
-    
-    if not prova_original or prova_original.criado_por != current_user.id:
-        flash('Erro de permissão.')
-        return redirect(url_for('dashboard'))
-    
-    nova_prova = Prova(
-        titulo=f"Cópia de {prova_original.titulo}",
-        criado_por=current_user.id,
-        ativa=False 
-    )
-    db.session.add(nova_prova)
-    db.session.flush()
-
-    for q in prova_original.questoes:
-        nova_q = Questao(
-            texto=q.texto,
-            opcao_a=q.opcao_a, opcao_b=q.opcao_b, opcao_c=q.opcao_c, opcao_d=q.opcao_d,
-            correta=q.correta,
-            prova_id=nova_prova.id
-        )
-        db.session.add(nova_q)
-    
-    db.session.commit()
-    flash(f'Prova duplicada com sucesso!')
-    return redirect(url_for('dashboard'))
-
-# --- EXPORTAÇÕES E RELATÓRIOS ---
-@app.route('/certificado/<int:resultado_id>')
-@login_required
-def gerar_certificado(resultado_id):
-    res = Resultado.query.get(resultado_id)
-    if res.aluno_id != current_user.id or res.nota < 7.0:
-        flash("Indisponível.")
-        return redirect(url_for('dashboard'))
-    prova = Prova.query.get(res.prova_id)
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Arial", size=24)
-    pdf.cell(200, 40, txt="CERTIFICADO DE CONCLUSÃO", ln=1, align="C")
-    pdf.set_font("Arial", size=16)
-    pdf.cell(200, 10, txt="Certificamos que o aluno(a):", ln=1, align="C")
-    pdf.set_font("Arial", 'B', size=20)
-    pdf.cell(200, 20, txt=current_user.nome, ln=1, align="C")
-    pdf.set_font("Arial", size=16)
-    texto = f"Concluiu a avaliação '{prova.titulo}' com nota {res.nota:.1f}"
-    pdf.cell(200, 20, txt=texto, ln=1, align="C")
-    pdf.set_font("Arial", size=12)
-    pdf.cell(200, 20, txt=f"Data: {res.data_envio.strftime('%d/%m/%Y')}", ln=1, align="C")
-    response = make_response(pdf.output(dest='S').encode('latin-1'))
-    response.headers['Content-Type'] = 'application/pdf'
-    response.headers['Content-Disposition'] = f'attachment; filename=certificado_{res.id}.pdf'
-    return response
-
 @app.route('/excluir_prova/<int:prova_id>')
 @login_required
 def excluir_prova(prova_id):
     prova = Prova.query.get(prova_id)
-    if not prova or prova.criado_por != current_user.id: return redirect(url_for('dashboard'))
-    Resultado.query.filter_by(prova_id=prova_id).delete()
-    Questao.query.filter_by(prova_id=prova_id).delete()
-    db.session.delete(prova)
-    db.session.commit()
-    flash('Prova excluída.')
+    if prova and prova.criado_por == current_user.id:
+        Resultado.query.filter_by(prova_id=prova_id).delete()
+        Questao.query.filter_by(prova_id=prova_id).delete()
+        db.session.delete(prova)
+        db.session.commit()
+        flash('Prova excluída.')
     return redirect(url_for('dashboard'))
 
 @app.route('/excluir_questao/<int:questao_id>')
 @login_required
 def excluir_questao(questao_id):
     questao = Questao.query.get(questao_id)
-    if not questao: return redirect(url_for('dashboard'))
-    prova = Prova.query.get(questao.prova_id)
-    if prova.criado_por != current_user.id: return redirect(url_for('dashboard'))
-    db.session.delete(questao)
-    db.session.commit()
-    flash('Questão removida.')
-    return redirect(url_for('adicionar_questoes', prova_id=prova.id))
+    if questao:
+        prova = Prova.query.get(questao.prova_id)
+        if prova.criado_por == current_user.id:
+            db.session.delete(questao)
+            db.session.commit()
+            flash('Questão removida.')
+            return redirect(url_for('adicionar_questoes', prova_id=prova.id))
+    return redirect(url_for('dashboard'))
 
+@app.route('/duplicar_prova/<int:prova_id>')
+@login_required
+def duplicar_prova(prova_id):
+    original = Prova.query.get(prova_id)
+    if original and original.criado_por == current_user.id:
+        nova = Prova(titulo=f"Cópia de {original.titulo}", criado_por=current_user.id, ativa=False)
+        db.session.add(nova)
+        db.session.flush()
+        for q in original.questoes:
+            db.session.add(Questao(
+                texto=q.texto, opcao_a=q.opcao_a, opcao_b=q.opcao_b,
+                opcao_c=q.opcao_c, opcao_d=q.opcao_d, correta=q.correta, prova_id=nova.id
+            ))
+        db.session.commit()
+        flash('Prova duplicada!')
+    return redirect(url_for('dashboard'))
+
+@app.route('/alternar_status/<int:prova_id>')
+@login_required
+def alternar_status(prova_id):
+    prova = Prova.query.get(prova_id)
+    if prova and prova.criado_por == current_user.id:
+        prova.ativa = not prova.ativa
+        db.session.commit()
+        flash(f"Prova {'aberta' if prova.ativa else 'fechada'}.")
+    return redirect(url_for('dashboard'))
+
+# --- ROTAS DE PROVA (ALUNO) ---
+@app.route('/fazer_prova/<int:prova_id>', methods=['GET', 'POST'])
+@login_required
+def fazer_prova(prova_id):
+    prova = Prova.query.get(prova_id)
+    if not prova or not prova.ativa:
+        flash('Prova não disponível.')
+        return redirect(url_for('dashboard'))
+    
+    ja_fez = Resultado.query.filter_by(aluno_id=current_user.id, prova_id=prova_id).first()
+    if ja_fez:
+        flash('Você já fez esta prova.')
+        return redirect(url_for('dashboard'))
+
+    if request.method == 'POST':
+        acertos = 0
+        detalhes = []
+        for q in prova.questoes:
+            resp = request.form.get(f'q_{q.id}')
+            acertou = (resp == q.correta)
+            if acertou: acertos += 1
+            detalhes.append({
+                'enunciado': q.texto,
+                'opcao_a': q.opcao_a, 'opcao_b': q.opcao_b,
+                'opcao_c': q.opcao_c, 'opcao_d': q.opcao_d,
+                'marcada': resp, 'correta': q.correta, 'acertou': acertou
+            })
+        
+        nota = (acertos / len(prova.questoes)) * 10 if prova.questoes else 0
+        resultado = Resultado(aluno_id=current_user.id, prova_id=prova.id, nota=nota)
+        db.session.add(resultado)
+        db.session.commit()
+        return render_template('resultado.html', nota=nota, total=len(prova.questoes), acertos=acertos, gabarito=detalhes, resultado_id=resultado.id)
+
+    questoes = list(prova.questoes)
+    random.shuffle(questoes)
+    return render_template('fazer_prova.html', prova=prova, questoes=questoes)
+
+# --- INTEGRAÇÕES AI (GEMINI E GROQ) ---
+
+# 1. API: Explicar Erro (GEMINI) - ✨ NOVO ✨
+@app.route('/api/explicar_erro', methods=['POST'])
+@login_required
+def api_explicar_erro():
+    if not GOOGLE_API_KEY:
+        return jsonify({'error': 'Chave Gemini não configurada'}), 500
+    
+    data = request.json
+    try:
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        prompt = f"""
+        Você é um professor particular gentil. O aluno errou esta questão:
+        PERGUNTA: {data['pergunta']}
+        ALUNO MARCOU: {data['marcada']}
+        CORRETA ERA: {data['correta']}
+        
+        Explique em no máximo 2 parágrafos curtos:
+        1. Por que a alternativa do aluno está incorreta (se fizer sentido explicar).
+        2. Por que a alternativa correta é a certa.
+        Use linguagem simples e direta.
+        """
+        response = model.generate_content(prompt)
+        return jsonify({'explicacao': response.text})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# 2. Gerar Prova (GROQ/LLAMA)
+@app.route('/gerar_com_ia/<int:prova_id>', methods=['POST'])
+@login_required
+def gerar_com_ia(prova_id):
+    if not GROQ_API_KEY:
+        flash("Erro: Chave Groq não configurada.")
+        return redirect(url_for('adicionar_questoes', prova_id=prova_id))
+    
+    file = request.files['arquivo']
+    if not file: return redirect(url_for('adicionar_questoes', prova_id=prova_id))
+
+    try:
+        reader = PdfReader(file)
+        text_content = "".join([p.extract_text() for p in reader.pages])[:30000]
+        
+        client = Groq(api_key=GROQ_API_KEY)
+        completion = client.chat.completions.create(
+            messages=[
+                {"role": "system", "content": "Gere um JSON puro com 3 questões de prova baseadas no texto."},
+                {"role": "user", "content": f"Texto: {text_content}\nFormato JSON: [{{'texto': '...', 'a': '...', 'b': '...', 'c': '...', 'd': '...', 'correta': 'a'}}]. Apenas JSON."}
+            ],
+            model="llama-3.3-70b-versatile", temperature=0.5
+        )
+        
+        content = completion.choices[0].message.content.replace("```json", "").replace("```", "").strip()
+        data = json.loads(content)
+        
+        for item in data:
+            db.session.add(Questao(
+                texto=item['texto'], opcao_a=item['a'], opcao_b=item['b'],
+                opcao_c=item['c'], opcao_d=item['d'], correta=item['correta'].lower(), prova_id=prova_id
+            ))
+        db.session.commit()
+        flash(f"{len(data)} questões geradas!")
+    except Exception as e:
+        flash(f"Erro IA: {str(e)}")
+        
+    return redirect(url_for('adicionar_questoes', prova_id=prova_id))
+
+# --- RELATÓRIOS E UTILITÁRIOS ---
 @app.route('/ver_notas/<int:prova_id>')
 @login_required
 def ver_notas(prova_id):
     prova = Prova.query.get(prova_id)
-    if not prova or prova.criado_por != current_user.id:
-        return redirect(url_for('dashboard'))
-    
+    if not prova or prova.criado_por != current_user.id: return redirect(url_for('dashboard'))
     resultados = Resultado.query.filter_by(prova_id=prova_id).all()
     
-    # --- CÁLCULOS ESTATÍSTICOS ---
-    total_alunos = len(resultados)
-    aprovados = 0
-    reprovados = 0
-    soma_notas = 0
+    aprovados = sum(1 for r in resultados if r.nota >= 7)
+    reprovados = len(resultados) - aprovados
+    media = sum(r.nota for r in resultados) / len(resultados) if resultados else 0
     
-    for res in resultados:
-        soma_notas += res.nota
-        if res.nota >= 7.0:
-            aprovados += 1
-        else:
-            reprovados += 1
-            
-    media_turma = (soma_notas / total_alunos) if total_alunos > 0 else 0
-    
-    estatisticas = {
-        'total': total_alunos,
-        'aprovados': aprovados,
-        'reprovados': reprovados,
-        'media': round(media_turma, 1)
-    }
-    
-    return render_template('ver_notas.html', prova=prova, resultados=resultados, stats=estatisticas)
+    stats = {'total': len(resultados), 'aprovados': aprovados, 'reprovados': reprovados, 'media': round(media, 1)}
+    return render_template('ver_notas.html', prova=prova, resultados=resultados, stats=stats)
 
 @app.route('/exportar_excel/<int:prova_id>')
 @login_required
 def exportar_excel(prova_id):
     prova = Prova.query.get(prova_id)
     if not prova or prova.criado_por != current_user.id: return redirect(url_for('dashboard'))
-    resultados = Resultado.query.filter_by(prova_id=prova_id).all()
-    dados = []
-    for res in resultados:
-        dados.append({'Aluno': res.aluno.nome, 'Email': res.aluno.email, 'Data': res.data_envio.strftime('%d/%m/%Y'), 'Nota': res.nota, 'Status': 'Aprovado' if res.nota >= 7.0 else 'Reprovado'})
-    df = pd.DataFrame(dados)
+    res = Resultado.query.filter_by(prova_id=prova_id).all()
+    data = [{'Aluno': r.aluno.nome, 'Nota': r.nota, 'Data': r.data_envio} for r in res]
+    
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name='Notas')
+        pd.DataFrame(data).to_excel(writer, index=False)
     output.seek(0)
-    return make_response(output.read(), 200, {'Content-Disposition': f'attachment; filename=notas_{prova.titulo}.xlsx', 'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'})
+    
+    return make_response(output.read(), 200, {'Content-Disposition': f'attachment; filename=notas_{prova.id}.xlsx', 'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'})
 
-# --- GERADOR COM IA (LLAMA 3.3 VIA GROQ) ---
-@app.route('/gerar_com_ia/<int:prova_id>', methods=['POST'])
+@app.route('/certificado/<int:resultado_id>')
 @login_required
-def gerar_com_ia(prova_id):
-    groq_key = os.getenv('GROQ_API_KEY')
-    if not groq_key:
-        flash("Erro: Chave API da Groq não configurada no Render.")
-        return redirect(url_for('adicionar_questoes', prova_id=prova_id))
+def gerar_certificado(resultado_id):
+    res = Resultado.query.get(resultado_id)
+    if res.aluno_id != current_user.id or res.nota < 7: return redirect(url_for('dashboard'))
+    
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", size=24)
+    pdf.cell(200, 40, txt="CERTIFICADO", ln=1, align="C")
+    pdf.set_font("Arial", size=16)
+    pdf.cell(200, 20, txt=f"Certificamos que {current_user.nome} completou a prova com nota {res.nota}", ln=1, align="C")
+    
+    response = make_response(pdf.output(dest='S').encode('latin-1'))
+    response.headers['Content-Type'] = 'application/pdf'
+    response.headers['Content-Disposition'] = f'attachment; filename=cert_{res.id}.pdf'
+    return response
 
-    file = request.files['arquivo']
-    if not file:
-        flash("Nenhum arquivo enviado.")
-        return redirect(url_for('adicionar_questoes', prova_id=prova_id))
-
-    try:
-        reader = PdfReader(file)
-        texto_completo = ""
-        for page in reader.pages:
-            texto_completo += page.extract_text()
-        
-        texto_completo = texto_completo[:30000]
-
-        client = Groq(api_key=groq_key)
-        
-        prompt = f"""
-        Crie 3 questões de múltipla escolha baseadas neste texto:
-        {texto_completo}
-        
-        Responda APENAS com um JSON puro neste formato exato (sem texto extra, sem markdown):
-        [
-            {{
-                "texto": "Pergunta",
-                "a": "Opção A", "b": "Opção B", "c": "Opção C", "d": "Opção D",
-                "correta": "a"
-            }}
-        ]
-        """
-
-        chat_completion = client.chat.completions.create(
-            messages=[{"role": "user", "content": prompt}],
-            model="llama-3.3-70b-versatile", 
-            temperature=0.5,
-        )
-
-        resposta_texto = chat_completion.choices[0].message.content
-        resposta_limpa = resposta_texto.replace("```json", "").replace("```", "").strip()
-        questoes_json = json.loads(resposta_limpa)
-
-        for item in questoes_json:
-            nova_q = Questao(
-                texto=item['texto'],
-                opcao_a=item['a'], opcao_b=item['b'], opcao_c=item['c'], opcao_d=item['d'],
-                correta=item['correta'].lower(),
-                prova_id=prova_id
-            )
-            db.session.add(nova_q)
-        
-        db.session.commit()
-        flash(f"Sucesso! {len(questoes_json)} questões geradas pelo Llama 3.3.")
-
-    except Exception as e:
-        flash(f"Erro ao gerar com IA: {str(e)}")
-        print(f"Erro IA: {e}")
-
-    return redirect(url_for('adicionar_questoes', prova_id=prova_id))
-
-# --- SETUP E MANUTENÇÃO ---
-@app.route('/debug_banco')
-def debug_banco(): return f"Banco: {app.config['SQLALCHEMY_DATABASE_URI'].split('@')[0]}"
-
+# --- ROTAS DE MANUTENÇÃO ---
 @app.route('/setup_banco_magico')
-def setup_banco_magico():
+def setup():
     with app.app_context(): db.create_all()
-    return "Tabelas criadas."
-
-@app.route('/migrar_db')
-def migrar_db():
-    try:
-        with db.engine.connect() as conn:
-            conn.execute(text("ALTER TABLE tb_provas ADD COLUMN IF NOT EXISTS ativa BOOLEAN DEFAULT TRUE;"))
-            conn.commit()
-        return "Migração 'ativa' OK!"
-    except Exception as e: return f"Erro migração: {e}"
+    return "Tabelas Criadas"
 
 @app.route('/corrigir_banco_ia')
-def corrigir_banco_ia():
+def fix_db():
     try:
         with db.engine.connect() as conn:
-            # Comando para mudar colunas para TEXT (PostgreSQL)
             conn.execute(text("ALTER TABLE tb_questoes ALTER COLUMN texto TYPE TEXT;"))
             conn.execute(text("ALTER TABLE tb_questoes ALTER COLUMN opcao_a TYPE TEXT;"))
             conn.execute(text("ALTER TABLE tb_questoes ALTER COLUMN opcao_b TYPE TEXT;"))
             conn.execute(text("ALTER TABLE tb_questoes ALTER COLUMN opcao_c TYPE TEXT;"))
             conn.execute(text("ALTER TABLE tb_questoes ALTER COLUMN opcao_d TYPE TEXT;"))
             conn.commit()
-        return "<h1>Sucesso! O banco agora aceita textos longos da IA.</h1>"
-    except Exception as e:
-        return f"<h1>Erro na correção: {str(e)}</h1>"
+        return "Banco Corrigido"
+    except Exception as e: return str(e)
 
 if __name__ == '__main__':
     with app.app_context(): db.create_all()
