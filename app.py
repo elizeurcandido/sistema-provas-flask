@@ -1,6 +1,7 @@
 import os
 import io
 import json
+import random  # Nova importação para embaralhar
 import pandas as pd
 from flask import Flask, render_template, redirect, url_for, request, flash, make_response
 from flask_sqlalchemy import SQLAlchemy
@@ -10,6 +11,7 @@ from datetime import datetime
 from fpdf import FPDF
 from pypdf import PdfReader
 from groq import Groq
+from sqlalchemy import text # Para migração do banco
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'chave_super_secreta_seguranca_total'
@@ -42,6 +44,7 @@ class Prova(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     titulo = db.Column(db.String(150), nullable=False)
     criado_por = db.Column(db.Integer, db.ForeignKey('tb_usuarios.id'))
+    ativa = db.Column(db.Boolean, default=True) # NOVO CAMPO: Status da prova
     questoes = db.relationship('Questao', backref='prova', lazy=True, cascade="all, delete-orphan")
 
 class Questao(db.Model):
@@ -120,7 +123,7 @@ def criar_prova():
     if not current_user.is_professor: return redirect(url_for('dashboard'))
     if request.method == 'POST':
         titulo = request.form.get('titulo')
-        nova_prova = Prova(titulo=titulo, criado_por=current_user.id)
+        nova_prova = Prova(titulo=titulo, criado_por=current_user.id, ativa=True)
         db.session.add(nova_prova)
         db.session.commit()
         return redirect(url_for('adicionar_questoes', prova_id=nova_prova.id))
@@ -147,13 +150,23 @@ def adicionar_questoes(prova_id):
 @app.route('/fazer_prova/<int:prova_id>', methods=['GET', 'POST'])
 @login_required
 def fazer_prova(prova_id):
+    prova = Prova.query.get(prova_id)
+    
+    # 1. Verifica se a prova existe e está ativa (Aberta)
+    if not prova:
+        return redirect(url_for('dashboard'))
+    
+    if not prova.ativa:
+        flash('Esta prova foi encerrada pelo professor.')
+        return redirect(url_for('dashboard'))
+
+    # 2. Verifica se o aluno já fez
     ja_fez = Resultado.query.filter_by(aluno_id=current_user.id, prova_id=prova_id).first()
     if ja_fez:
         flash('Você já realizou esta prova! Veja seu desempenho no histórico.')
         return redirect(url_for('dashboard'))
 
-    prova = Prova.query.get(prova_id)
-    
+    # Lógica de salvar respostas
     if request.method == 'POST':
         acertos = 0
         total = len(prova.questoes)
@@ -175,13 +188,39 @@ def fazer_prova(prova_id):
         db.session.add(resultado)
         db.session.commit()
         return render_template('resultado.html', nota=nota_final, total=total, acertos=acertos, gabarito=detalhes_gabarito, resultado_id=resultado.id)
-    return render_template('fazer_prova.html', prova=prova)
+    
+    # 3. RANDOMIZAÇÃO (ANTI-COLA)
+    # Convertemos para lista para poder embaralhar sem mexer no banco
+    questoes_embaralhadas = list(prova.questoes)
+    random.shuffle(questoes_embaralhadas)
+    
+    # Passamos a lista embaralhada para o template
+    # Atenção: Precisamos passar 'prova' E 'questoes_embaralhadas'
+    return render_template('fazer_prova.html', prova=prova, questoes=questoes_embaralhadas)
 
 @app.route('/logout')
 @login_required
 def logout():
     logout_user()
     return redirect(url_for('index'))
+
+# --- ROTA NOVA: ALTERNAR STATUS DA PROVA ---
+@app.route('/alternar_status/<int:prova_id>')
+@login_required
+def alternar_status(prova_id):
+    prova = Prova.query.get(prova_id)
+    if not prova or prova.criado_por != current_user.id:
+        return redirect(url_for('dashboard'))
+    
+    # Inverte o status (se True vira False, se False vira True)
+    prova.ativa = not prova.ativa
+    db.session.commit()
+    
+    status_msg = "aberta" if prova.ativa else "fechada"
+    flash(f'Prova {status_msg} com sucesso!')
+    return redirect(url_for('dashboard'))
+
+# --- FUNCIONALIDADES AVANÇADAS ---
 
 @app.route('/certificado/<int:resultado_id>')
 @login_required
@@ -300,7 +339,6 @@ def gerar_com_ia(prova_id):
         ]
         """
 
-        # MODELO ATUALIZADO PARA FUNCIONAR
         chat_completion = client.chat.completions.create(
             messages=[
                 {"role": "system", "content": "Você é um gerador de provas JSON."},
@@ -332,13 +370,25 @@ def gerar_com_ia(prova_id):
 
     return redirect(url_for('adicionar_questoes', prova_id=prova_id))
 
-# --- SETUP ---
+# --- SETUP E MIGRAÇÃO ---
 @app.route('/debug_banco')
 def debug_banco(): return f"Banco: {app.config['SQLALCHEMY_DATABASE_URI'].split('@')[0]}"
+
 @app.route('/setup_banco_magico')
 def setup_banco_magico():
     with app.app_context(): db.create_all()
     return "Tabelas criadas."
+
+@app.route('/migrar_db')
+def migrar_db():
+    try:
+        # Comando SQL para adicionar a coluna 'ativa' se ela não existir
+        with db.engine.connect() as conn:
+            conn.execute(text("ALTER TABLE tb_provas ADD COLUMN IF NOT EXISTS ativa BOOLEAN DEFAULT TRUE;"))
+            conn.commit()
+        return "Migração realizada: Coluna 'ativa' adicionada com sucesso!"
+    except Exception as e:
+        return f"Erro na migração (talvez já exista): {str(e)}"
 
 if __name__ == '__main__':
     with app.app_context(): db.create_all()
