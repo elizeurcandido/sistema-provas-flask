@@ -50,6 +50,7 @@ class Prova(db.Model):
 class Questao(db.Model):
     __tablename__ = 'tb_questoes'
     id = db.Column(db.Integer, primary_key=True)
+    # USO DE db.Text PARA EVITAR ERRO DE LIMITE DE CARACTERES DA IA
     texto = db.Column(db.Text, nullable=False)
     opcao_a = db.Column(db.Text)
     opcao_b = db.Column(db.Text)
@@ -290,9 +291,34 @@ def excluir_questao(questao_id):
 @login_required
 def ver_notas(prova_id):
     prova = Prova.query.get(prova_id)
-    if not prova or prova.criado_por != current_user.id: return redirect(url_for('dashboard'))
+    if not prova or prova.criado_por != current_user.id:
+        return redirect(url_for('dashboard'))
+    
     resultados = Resultado.query.filter_by(prova_id=prova_id).all()
-    return render_template('ver_notas.html', prova=prova, resultados=resultados)
+    
+    # --- CÁLCULOS ESTATÍSTICOS ---
+    total_alunos = len(resultados)
+    aprovados = 0
+    reprovados = 0
+    soma_notas = 0
+    
+    for res in resultados:
+        soma_notas += res.nota
+        if res.nota >= 7.0:
+            aprovados += 1
+        else:
+            reprovados += 1
+            
+    media_turma = (soma_notas / total_alunos) if total_alunos > 0 else 0
+    
+    estatisticas = {
+        'total': total_alunos,
+        'aprovados': aprovados,
+        'reprovados': reprovados,
+        'media': round(media_turma, 1)
+    }
+    
+    return render_template('ver_notas.html', prova=prova, resultados=resultados, stats=estatisticas)
 
 @app.route('/exportar_excel/<int:prova_id>')
 @login_required
@@ -310,7 +336,7 @@ def exportar_excel(prova_id):
     output.seek(0)
     return make_response(output.read(), 200, {'Content-Disposition': f'attachment; filename=notas_{prova.titulo}.xlsx', 'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'})
 
-# --- GERADOR COM IA (LLAMA 3.3) ---
+# --- GERADOR COM IA (LLAMA 3.3 VIA GROQ) ---
 @app.route('/gerar_com_ia/<int:prova_id>', methods=['POST'])
 @login_required
 def gerar_com_ia(prova_id):
@@ -368,7 +394,7 @@ def gerar_com_ia(prova_id):
             db.session.add(nova_q)
         
         db.session.commit()
-        flash(f"Sucesso! {len(questoes_json)} questões geradas.")
+        flash(f"Sucesso! {len(questoes_json)} questões geradas pelo Llama 3.3.")
 
     except Exception as e:
         flash(f"Erro ao gerar com IA: {str(e)}")
@@ -376,7 +402,7 @@ def gerar_com_ia(prova_id):
 
     return redirect(url_for('adicionar_questoes', prova_id=prova_id))
 
-# --- SETUP E MIGRAÇÃO ---
+# --- SETUP E MANUTENÇÃO ---
 @app.route('/debug_banco')
 def debug_banco(): return f"Banco: {app.config['SQLALCHEMY_DATABASE_URI'].split('@')[0]}"
 
@@ -398,6 +424,7 @@ def migrar_db():
 def corrigir_banco_ia():
     try:
         with db.engine.connect() as conn:
+            # Comando para mudar colunas para TEXT (PostgreSQL)
             conn.execute(text("ALTER TABLE tb_questoes ALTER COLUMN texto TYPE TEXT;"))
             conn.execute(text("ALTER TABLE tb_questoes ALTER COLUMN opcao_a TYPE TEXT;"))
             conn.execute(text("ALTER TABLE tb_questoes ALTER COLUMN opcao_b TYPE TEXT;"))
