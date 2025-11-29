@@ -1,7 +1,7 @@
 import os
 import io
 import json
-import random  # Nova importação para embaralhar
+import random
 import pandas as pd
 from flask import Flask, render_template, redirect, url_for, request, flash, make_response
 from flask_sqlalchemy import SQLAlchemy
@@ -11,7 +11,7 @@ from datetime import datetime
 from fpdf import FPDF
 from pypdf import PdfReader
 from groq import Groq
-from sqlalchemy import text # Para migração do banco
+from sqlalchemy import text 
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'chave_super_secreta_seguranca_total'
@@ -44,17 +44,17 @@ class Prova(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     titulo = db.Column(db.String(150), nullable=False)
     criado_por = db.Column(db.Integer, db.ForeignKey('tb_usuarios.id'))
-    ativa = db.Column(db.Boolean, default=True) # NOVO CAMPO: Status da prova
+    ativa = db.Column(db.Boolean, default=True)
     questoes = db.relationship('Questao', backref='prova', lazy=True, cascade="all, delete-orphan")
 
 class Questao(db.Model):
     __tablename__ = 'tb_questoes'
     id = db.Column(db.Integer, primary_key=True)
-    texto = db.Column(db.String(300), nullable=False)
-    opcao_a = db.Column(db.String(100))
-    opcao_b = db.Column(db.String(100))
-    opcao_c = db.Column(db.String(100))
-    opcao_d = db.Column(db.String(100))
+    texto = db.Column(db.Text, nullable=False)
+    opcao_a = db.Column(db.Text)
+    opcao_b = db.Column(db.Text)
+    opcao_c = db.Column(db.Text)
+    opcao_d = db.Column(db.Text)
     correta = db.Column(db.String(1), nullable=False) 
     prova_id = db.Column(db.Integer, db.ForeignKey('tb_provas.id'), nullable=False)
 
@@ -152,26 +152,20 @@ def adicionar_questoes(prova_id):
 def fazer_prova(prova_id):
     prova = Prova.query.get(prova_id)
     
-    # 1. Verifica se a prova existe e está ativa (Aberta)
-    if not prova:
-        return redirect(url_for('dashboard'))
-    
+    if not prova: return redirect(url_for('dashboard'))
     if not prova.ativa:
         flash('Esta prova foi encerrada pelo professor.')
         return redirect(url_for('dashboard'))
 
-    # 2. Verifica se o aluno já fez
     ja_fez = Resultado.query.filter_by(aluno_id=current_user.id, prova_id=prova_id).first()
     if ja_fez:
         flash('Você já realizou esta prova! Veja seu desempenho no histórico.')
         return redirect(url_for('dashboard'))
 
-    # Lógica de salvar respostas
     if request.method == 'POST':
         acertos = 0
         total = len(prova.questoes)
         detalhes_gabarito = []
-        
         for questao in prova.questoes:
             resposta_aluno = request.form.get(f'q_{questao.id}')
             acertou = (resposta_aluno == questao.correta)
@@ -182,20 +176,14 @@ def fazer_prova(prova_id):
                 'opcao_c': questao.opcao_c, 'opcao_d': questao.opcao_d,
                 'marcada': resposta_aluno, 'correta': questao.correta, 'acertou': acertou
             })
-            
         nota_final = (acertos / total) * 10 if total > 0 else 0
         resultado = Resultado(aluno_id=current_user.id, prova_id=prova.id, nota=nota_final)
         db.session.add(resultado)
         db.session.commit()
         return render_template('resultado.html', nota=nota_final, total=total, acertos=acertos, gabarito=detalhes_gabarito, resultado_id=resultado.id)
     
-    # 3. RANDOMIZAÇÃO (ANTI-COLA)
-    # Convertemos para lista para poder embaralhar sem mexer no banco
     questoes_embaralhadas = list(prova.questoes)
     random.shuffle(questoes_embaralhadas)
-    
-    # Passamos a lista embaralhada para o template
-    # Atenção: Precisamos passar 'prova' E 'questoes_embaralhadas'
     return render_template('fazer_prova.html', prova=prova, questoes=questoes_embaralhadas)
 
 @app.route('/logout')
@@ -204,24 +192,50 @@ def logout():
     logout_user()
     return redirect(url_for('index'))
 
-# --- ROTA NOVA: ALTERNAR STATUS DA PROVA ---
 @app.route('/alternar_status/<int:prova_id>')
 @login_required
 def alternar_status(prova_id):
     prova = Prova.query.get(prova_id)
     if not prova or prova.criado_por != current_user.id:
         return redirect(url_for('dashboard'))
-    
-    # Inverte o status (se True vira False, se False vira True)
     prova.ativa = not prova.ativa
     db.session.commit()
-    
     status_msg = "aberta" if prova.ativa else "fechada"
     flash(f'Prova {status_msg} com sucesso!')
     return redirect(url_for('dashboard'))
 
-# --- FUNCIONALIDADES AVANÇADAS ---
+# --- NOVA FUNCIONALIDADE: DUPLICAR PROVA ---
+@app.route('/duplicar_prova/<int:prova_id>')
+@login_required
+def duplicar_prova(prova_id):
+    prova_original = Prova.query.get(prova_id)
+    
+    if not prova_original or prova_original.criado_por != current_user.id:
+        flash('Erro de permissão.')
+        return redirect(url_for('dashboard'))
+    
+    nova_prova = Prova(
+        titulo=f"Cópia de {prova_original.titulo}",
+        criado_por=current_user.id,
+        ativa=False 
+    )
+    db.session.add(nova_prova)
+    db.session.flush()
 
+    for q in prova_original.questoes:
+        nova_q = Questao(
+            texto=q.texto,
+            opcao_a=q.opcao_a, opcao_b=q.opcao_b, opcao_c=q.opcao_c, opcao_d=q.opcao_d,
+            correta=q.correta,
+            prova_id=nova_prova.id
+        )
+        db.session.add(nova_q)
+    
+    db.session.commit()
+    flash(f'Prova duplicada com sucesso!')
+    return redirect(url_for('dashboard'))
+
+# --- EXPORTAÇÕES E RELATÓRIOS ---
 @app.route('/certificado/<int:resultado_id>')
 @login_required
 def gerar_certificado(resultado_id):
@@ -252,8 +266,7 @@ def gerar_certificado(resultado_id):
 @login_required
 def excluir_prova(prova_id):
     prova = Prova.query.get(prova_id)
-    if not prova or prova.criado_por != current_user.id:
-        return redirect(url_for('dashboard'))
+    if not prova or prova.criado_por != current_user.id: return redirect(url_for('dashboard'))
     Resultado.query.filter_by(prova_id=prova_id).delete()
     Questao.query.filter_by(prova_id=prova_id).delete()
     db.session.delete(prova)
@@ -289,11 +302,7 @@ def exportar_excel(prova_id):
     resultados = Resultado.query.filter_by(prova_id=prova_id).all()
     dados = []
     for res in resultados:
-        dados.append({
-            'Aluno': res.aluno.nome, 'Email': res.aluno.email,
-            'Data': res.data_envio.strftime('%d/%m/%Y'), 'Nota': res.nota,
-            'Status': 'Aprovado' if res.nota >= 7.0 else 'Reprovado'
-        })
+        dados.append({'Aluno': res.aluno.nome, 'Email': res.aluno.email, 'Data': res.data_envio.strftime('%d/%m/%Y'), 'Nota': res.nota, 'Status': 'Aprovado' if res.nota >= 7.0 else 'Reprovado'})
     df = pd.DataFrame(dados)
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -301,7 +310,7 @@ def exportar_excel(prova_id):
     output.seek(0)
     return make_response(output.read(), 200, {'Content-Disposition': f'attachment; filename=notas_{prova.titulo}.xlsx', 'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'})
 
-# --- GERADOR COM IA (LLAMA 3.3 VIA GROQ) ---
+# --- GERADOR COM IA (LLAMA 3.3) ---
 @app.route('/gerar_com_ia/<int:prova_id>', methods=['POST'])
 @login_required
 def gerar_com_ia(prova_id):
@@ -340,10 +349,7 @@ def gerar_com_ia(prova_id):
         """
 
         chat_completion = client.chat.completions.create(
-            messages=[
-                {"role": "system", "content": "Você é um gerador de provas JSON."},
-                {"role": "user", "content": prompt}
-            ],
+            messages=[{"role": "user", "content": prompt}],
             model="llama-3.3-70b-versatile", 
             temperature=0.5,
         )
@@ -362,7 +368,7 @@ def gerar_com_ia(prova_id):
             db.session.add(nova_q)
         
         db.session.commit()
-        flash(f"Sucesso! {len(questoes_json)} questões geradas pelo Llama 3.3.")
+        flash(f"Sucesso! {len(questoes_json)} questões geradas.")
 
     except Exception as e:
         flash(f"Erro ao gerar com IA: {str(e)}")
@@ -382,13 +388,25 @@ def setup_banco_magico():
 @app.route('/migrar_db')
 def migrar_db():
     try:
-        # Comando SQL para adicionar a coluna 'ativa' se ela não existir
         with db.engine.connect() as conn:
             conn.execute(text("ALTER TABLE tb_provas ADD COLUMN IF NOT EXISTS ativa BOOLEAN DEFAULT TRUE;"))
             conn.commit()
-        return "Migração realizada: Coluna 'ativa' adicionada com sucesso!"
+        return "Migração 'ativa' OK!"
+    except Exception as e: return f"Erro migração: {e}"
+
+@app.route('/corrigir_banco_ia')
+def corrigir_banco_ia():
+    try:
+        with db.engine.connect() as conn:
+            conn.execute(text("ALTER TABLE tb_questoes ALTER COLUMN texto TYPE TEXT;"))
+            conn.execute(text("ALTER TABLE tb_questoes ALTER COLUMN opcao_a TYPE TEXT;"))
+            conn.execute(text("ALTER TABLE tb_questoes ALTER COLUMN opcao_b TYPE TEXT;"))
+            conn.execute(text("ALTER TABLE tb_questoes ALTER COLUMN opcao_c TYPE TEXT;"))
+            conn.execute(text("ALTER TABLE tb_questoes ALTER COLUMN opcao_d TYPE TEXT;"))
+            conn.commit()
+        return "<h1>Sucesso! O banco agora aceita textos longos da IA.</h1>"
     except Exception as e:
-        return f"Erro na migração (talvez já exista): {str(e)}"
+        return f"<h1>Erro na correção: {str(e)}</h1>"
 
 if __name__ == '__main__':
     with app.app_context(): db.create_all()
