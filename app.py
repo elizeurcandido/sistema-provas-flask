@@ -9,7 +9,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
 from fpdf import FPDF
 from pypdf import PdfReader
-from groq import Groq  # Nova importação para o Llama
+from groq import Groq
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'chave_super_secreta_seguranca_total'
@@ -262,7 +262,7 @@ def exportar_excel(prova_id):
     output.seek(0)
     return make_response(output.read(), 200, {'Content-Disposition': f'attachment; filename=notas_{prova.titulo}.xlsx', 'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'})
 
-# --- GERADOR COM IA (LLAMA 3 VIA GROQ) ---
+# --- GERADOR COM IA (LLAMA 3.3 VIA GROQ) ---
 @app.route('/gerar_com_ia/<int:prova_id>', methods=['POST'])
 @login_required
 def gerar_com_ia(prova_id):
@@ -282,7 +282,7 @@ def gerar_com_ia(prova_id):
         for page in reader.pages:
             texto_completo += page.extract_text()
         
-        texto_completo = texto_completo[:30000] # Limite para não estourar tokens
+        texto_completo = texto_completo[:30000]
 
         client = Groq(api_key=groq_key)
         
@@ -300,19 +300,18 @@ def gerar_com_ia(prova_id):
         ]
         """
 
+        # MODELO ATUALIZADO PARA FUNCIONAR
         chat_completion = client.chat.completions.create(
             messages=[
                 {"role": "system", "content": "Você é um gerador de provas JSON."},
                 {"role": "user", "content": prompt}
             ],
-            model="llama3-8b-8192", # Modelo Llama 3 muito rápido
+            model="llama-3.3-70b-versatile", 
             temperature=0.5,
         )
 
         resposta_texto = chat_completion.choices[0].message.content
-        # Limpeza extra caso venha com markdown
         resposta_limpa = resposta_texto.replace("```json", "").replace("```", "").strip()
-        
         questoes_json = json.loads(resposta_limpa)
 
         for item in questoes_json:
@@ -325,7 +324,7 @@ def gerar_com_ia(prova_id):
             db.session.add(nova_q)
         
         db.session.commit()
-        flash(f"Sucesso! {len(questoes_json)} questões geradas pelo Llama 3.")
+        flash(f"Sucesso! {len(questoes_json)} questões geradas pelo Llama 3.3.")
 
     except Exception as e:
         flash(f"Erro ao gerar com IA: {str(e)}")
