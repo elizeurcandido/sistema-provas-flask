@@ -8,19 +8,13 @@ from flask_login import LoginManager, UserMixin, login_user, login_required, log
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
 from fpdf import FPDF
-import google.generativeai as genai
 from pypdf import PdfReader
+from groq import Groq  # Nova importação para o Llama
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'chave_super_secreta_seguranca_total'
 
-# --- CONFIGURAÇÃO GEMINI (IA) ---
-# Tenta pegar a chave do ambiente (Render) ou usa uma string vazia
-GOOGLE_API_KEY = os.getenv('GEMINI_API_KEY')
-if GOOGLE_API_KEY:
-    genai.configure(api_key=GOOGLE_API_KEY)
-
-# --- CONFIGURAÇÃO DO BANCO DE DADOS (HÍBRIDO) ---
+# --- CONFIGURAÇÃO DO BANCO DE DADOS ---
 uri = os.getenv("DATABASE_URL")
 if uri and uri.startswith("postgres://"):
     uri = uri.replace("postgres://", "postgresql://", 1)
@@ -33,7 +27,7 @@ login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
 
-# --- MODELOS (TABELAS) ---
+# --- MODELOS ---
 class User(UserMixin, db.Model):
     __tablename__ = 'tb_usuarios' 
     id = db.Column(db.Integer, primary_key=True)
@@ -189,8 +183,6 @@ def logout():
     logout_user()
     return redirect(url_for('index'))
 
-# --- FUNCIONALIDADES AVANÇADAS ---
-
 @app.route('/certificado/<int:resultado_id>')
 @login_required
 def gerar_certificado(resultado_id):
@@ -270,12 +262,13 @@ def exportar_excel(prova_id):
     output.seek(0)
     return make_response(output.read(), 200, {'Content-Disposition': f'attachment; filename=notas_{prova.titulo}.xlsx', 'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'})
 
-# --- GERADOR COM IA (GEMINI) ---
+# --- GERADOR COM IA (LLAMA 3 VIA GROQ) ---
 @app.route('/gerar_com_ia/<int:prova_id>', methods=['POST'])
 @login_required
 def gerar_com_ia(prova_id):
-    if not os.getenv('GEMINI_API_KEY'):
-        flash("Erro: Chave API do Gemini não configurada no Render.")
+    groq_key = os.getenv('GROQ_API_KEY')
+    if not groq_key:
+        flash("Erro: Chave API da Groq não configurada no Render.")
         return redirect(url_for('adicionar_questoes', prova_id=prova_id))
 
     file = request.files['arquivo']
@@ -289,27 +282,37 @@ def gerar_com_ia(prova_id):
         for page in reader.pages:
             texto_completo += page.extract_text()
         
-        texto_completo = texto_completo[:30000] 
+        texto_completo = texto_completo[:30000] # Limite para não estourar tokens
 
-        # USANDO O MODELO MAIS ESTÁVEL E COMPATÍVEL
-        model = genai.GenerativeModel('gemini-pro')
+        client = Groq(api_key=groq_key)
         
         prompt = f"""
-        Você é um professor experiente. Com base no texto abaixo, crie 3 questões de múltipla escolha.
-        TEXTO: {texto_completo}
-        SAÍDA OBRIGATÓRIA: Retorne APENAS um JSON puro (sem markdown ```json) seguindo estritamente este formato:
+        Crie 3 questões de múltipla escolha baseadas neste texto:
+        {texto_completo}
+        
+        Responda APENAS com um JSON puro neste formato exato (sem texto extra, sem markdown):
         [
             {{
-                "texto": "Enunciado da questão aqui",
+                "texto": "Pergunta",
                 "a": "Opção A", "b": "Opção B", "c": "Opção C", "d": "Opção D",
                 "correta": "a"
             }}
         ]
-        A resposta correta deve ser apenas a letra 'a', 'b', 'c' ou 'd' minúscula.
         """
 
-        response = model.generate_content(prompt)
-        resposta_limpa = response.text.replace("```json", "").replace("```", "").strip()
+        chat_completion = client.chat.completions.create(
+            messages=[
+                {"role": "system", "content": "Você é um gerador de provas JSON."},
+                {"role": "user", "content": prompt}
+            ],
+            model="llama3-8b-8192", # Modelo Llama 3 muito rápido
+            temperature=0.5,
+        )
+
+        resposta_texto = chat_completion.choices[0].message.content
+        # Limpeza extra caso venha com markdown
+        resposta_limpa = resposta_texto.replace("```json", "").replace("```", "").strip()
+        
         questoes_json = json.loads(resposta_limpa)
 
         for item in questoes_json:
@@ -322,7 +325,7 @@ def gerar_com_ia(prova_id):
             db.session.add(nova_q)
         
         db.session.commit()
-        flash(f"Sucesso! {len(questoes_json)} questões geradas pela IA.")
+        flash(f"Sucesso! {len(questoes_json)} questões geradas pelo Llama 3.")
 
     except Exception as e:
         flash(f"Erro ao gerar com IA: {str(e)}")
