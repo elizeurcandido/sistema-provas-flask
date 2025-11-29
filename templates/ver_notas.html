@@ -20,20 +20,34 @@
             width: 100px;
         }
 
+        /* Container para garantir que o gráfico não fique gigante */
         .chart-container {
             position: relative;
-            height: 200px;
-            width: 200px;
-            margin: 0 auto;
+            height: 220px;
+            width: 100%;
+            display: flex;
+            justify-content: center;
         }
 
         .stat-card {
             transition: transform 0.2s;
+            border-left: 4px solid transparent;
         }
 
         .stat-card:hover {
-            transform: translateY(-5px);
+            transform: translateY(-3px);
         }
+
+        .card-media {
+            border-left-color: #0d6efd;
+        }
+
+        /* Azul para Média */
+        .card-total {
+            border-left-color: #6c757d;
+        }
+
+        /* Cinza para Total */
     </style>
 </head>
 
@@ -52,72 +66,86 @@
 
     <div class="container pb-5">
 
-        <!-- Cabeçalho e Ações -->
+        <!-- Cabeçalho e Botão Excel -->
         <div class="d-flex justify-content-between align-items-center mb-4">
             <div>
                 <h2 class="fw-bold text-primary mb-0">{{ prova.titulo }}</h2>
-                <p class="text-muted">Análise de desempenho da turma</p>
+                <p class="text-muted mb-0">Análise estatística da turma</p>
             </div>
             <a href="/exportar_excel/{{ prova.id }}" class="btn btn-success shadow-sm">
                 <i class="bi bi-file-earmark-excel-fill me-2"></i>Baixar Excel
             </a>
         </div>
 
-        <!-- PAINEL DE ESTATÍSTICAS (NOVO!) -->
+        <!-- PAINEL DE GRÁFICOS E ESTATÍSTICAS -->
         <div class="row g-4 mb-4">
-            <!-- Card 1: Gráfico de Pizza (Aprovação) -->
+
+            <!-- 1. Gráfico de Pizza (Aprovação vs Reprovação) -->
             <div class="col-md-4">
                 <div class="card border-0 shadow-sm h-100 stat-card">
-                    <div class="card-body text-center">
-                        <h6 class="text-muted text-uppercase mb-3 fw-bold">Taxa de Aprovação</h6>
+                    <div class="card-body text-center d-flex flex-column justify-content-center">
+                        <h6 class="text-muted text-uppercase fw-bold mb-3">Taxa de Aprovação</h6>
+
+                        <!-- Verificação: Só mostra gráfico se houver alunos -->
                         {% if stats.total > 0 %}
                         <div class="chart-container">
                             <canvas id="chartAprovacao"></canvas>
                         </div>
                         {% else %}
-                        <div class="py-5 text-muted">
-                            <i class="bi bi-pie-chart fs-1 d-block mb-2"></i>
-                            Sem dados suficientes
+                        <div class="text-muted py-4">
+                            <i class="bi bi-pie-chart fs-1 opacity-25 d-block mb-2"></i>
+                            <p class="small mt-2">Aguardando entregas para gerar gráfico.</p>
                         </div>
                         {% endif %}
                     </div>
                 </div>
             </div>
 
-            <!-- Card 2: Estatísticas Numéricas -->
+            <!-- 2. Números da Turma (Média e Totais) -->
             <div class="col-md-8">
                 <div class="row g-3 h-100">
-                    <!-- Média da Turma -->
-                    <div class="col-md-4">
-                        <div class="card border-0 shadow-sm h-100 bg-primary text-white stat-card">
-                            <div class="card-body text-center d-flex flex-column justify-content-center">
-                                <h1 class="display-3 fw-bold mb-0">{{ stats.media }}</h1>
-                                <p class="mb-0 opacity-75 fw-bold">Média da Turma</p>
-                            </div>
-                        </div>
-                    </div>
-                    <!-- Total de Entregas -->
-                    <div class="col-md-4">
-                        <div class="card border-0 shadow-sm h-100 stat-card">
-                            <div class="card-body text-center d-flex flex-column justify-content-center">
-                                <h2 class="text-dark fw-bold mb-0 display-4">{{ stats.total }}</h2>
-                                <p class="text-muted mb-0 fw-bold">Provas Entregues</p>
-                            </div>
-                        </div>
-                    </div>
-                    <!-- Detalhe Aprovados/Reprovados -->
-                    <div class="col-md-4">
-                        <div class="card border-0 shadow-sm h-100 stat-card">
-                            <div class="card-body d-flex flex-column justify-content-center gap-3">
-                                <div class="d-flex justify-content-between align-items-center border-bottom pb-2">
-                                    <span class="text-success fw-bold"><i
-                                            class="bi bi-check-circle-fill me-2"></i>Aprovados</span>
-                                    <span class="badge bg-success rounded-pill fs-6">{{ stats.aprovados }}</span>
+                    <!-- Cartão da Média -->
+                    <div class="col-md-6">
+                        <div class="card border-0 shadow-sm h-100 stat-card card-media bg-white">
+                            <div class="card-body d-flex align-items-center justify-content-between">
+                                <div>
+                                    <h6 class="text-muted text-uppercase mb-1 small fw-bold">Média Geral</h6>
+                                    <!-- Cor da nota: Verde se >= 7, Vermelho se menor -->
+                                    <h1
+                                        class="display-4 fw-bold mb-0 {% if stats.media >= 7 %}text-success{% else %}text-danger{% endif %}">
+                                        {{ stats.media }}
+                                    </h1>
                                 </div>
-                                <div class="d-flex justify-content-between align-items-center">
-                                    <span class="text-danger fw-bold"><i
-                                            class="bi bi-x-circle-fill me-2"></i>Reprovados</span>
-                                    <span class="badge bg-danger rounded-pill fs-6">{{ stats.reprovados }}</span>
+                                <i class="bi bi-calculator fs-1 text-primary opacity-25"></i>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- Cartão do Total -->
+                    <div class="col-md-6">
+                        <div class="card border-0 shadow-sm h-100 stat-card card-total bg-white">
+                            <div class="card-body d-flex align-items-center justify-content-between">
+                                <div>
+                                    <h6 class="text-muted text-uppercase mb-1 small fw-bold">Provas Entregues</h6>
+                                    <h1 class="display-4 fw-bold text-dark mb-0">{{ stats.total }}</h1>
+                                </div>
+                                <i class="bi bi-file-earmark-check fs-1 text-secondary opacity-25"></i>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- Detalhes Rápidos -->
+                    <div class="col-12">
+                        <div class="card border-0 shadow-sm h-100">
+                            <div class="card-body d-flex justify-content-around align-items-center">
+                                <div class="text-center">
+                                    <h3 class="text-success fw-bold mb-0">{{ stats.aprovados }}</h3>
+                                    <span
+                                        class="badge bg-success bg-opacity-10 text-success border border-success">Aprovados</span>
+                                </div>
+                                <div class="vr opacity-25"></div>
+                                <div class="text-center">
+                                    <h3 class="text-danger fw-bold mb-0">{{ stats.reprovados }}</h3>
+                                    <span
+                                        class="badge bg-danger bg-opacity-10 text-danger border border-danger">Reprovados</span>
                                 </div>
                             </div>
                         </div>
@@ -126,17 +154,17 @@
             </div>
         </div>
 
-        <!-- Tabela de Alunos -->
+        <!-- Tabela Detalhada de Alunos -->
         <div class="card border-0 shadow-sm">
             <div class="card-header bg-white py-3 border-bottom-0">
-                <h6 class="mb-0 fw-bold text-secondary"><i class="bi bi-person-lines-fill me-2"></i>Lista de Alunos</h6>
+                <h6 class="mb-0 fw-bold text-secondary"><i class="bi bi-table me-2"></i>Lista Detalhada</h6>
             </div>
             <div class="card-body p-0">
                 <div class="table-responsive">
                     <table class="table table-hover mb-0 align-middle">
                         <thead class="table-light">
                             <tr>
-                                <th class="ps-4 py-3">Aluno</th>
+                                <th class="ps-4">Aluno</th>
                                 <th>Email</th>
                                 <th>Data Envio</th>
                                 <th class="text-center">Nota</th>
@@ -147,16 +175,13 @@
                             {% for res in resultados %}
                             <tr>
                                 <td class="ps-4 fw-bold text-dark">{{ res.aluno.nome }}</td>
-                                <td class="text-muted">{{ res.aluno.email }}</td>
-                                <td>
-                                    <span class="badge bg-light text-dark border">
-                                        <i class="bi bi-calendar3 me-1"></i> {{ res.data_envio.strftime('%d/%m %H:%M')
-                                        }}
-                                    </span>
+                                <td class="text-muted small">{{ res.aluno.email }}</td>
+                                <td class="small text-muted">
+                                    <i class="bi bi-calendar3 me-1"></i>{{ res.data_envio.strftime('%d/%m %H:%M') }}
                                 </td>
                                 <td class="text-center">
                                     <span
-                                        class="fs-5 fw-bold {% if res.nota >= 7 %}text-success{% else %}text-danger{% endif %}">
+                                        class="fw-bold fs-5 {% if res.nota >= 7 %}text-success{% else %}text-danger{% endif %}">
                                         {{ "%.1f"|format(res.nota) }}
                                     </span>
                                 </td>
@@ -173,7 +198,7 @@
                             {% else %}
                             <tr>
                                 <td colspan="5" class="text-center py-5 text-muted">
-                                    <i class="bi bi-inbox fs-1 d-block mb-2 opacity-50"></i>
+                                    <i class="bi bi-inbox fs-1 d-block mb-2 opacity-25"></i>
                                     Nenhum aluno realizou esta prova ainda.
                                 </td>
                             </tr>
@@ -183,54 +208,59 @@
                 </div>
             </div>
             <div class="card-footer bg-white text-muted small py-3 border-top-0">
-                Total de envios: <strong>{{ resultados|length }}</strong>
+                Total de registos: <strong>{{ resultados|length }}</strong>
             </div>
         </div>
     </div>
 
     <!-- Scripts -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    <!-- Importação do Chart.js para os gráficos -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
     <script>
-        // Configuração do Gráfico de Rosca (Doughnut Chart)
+        // Inicializa o gráfico APENAS se o elemento existir (ou seja, se houver dados > 0)
         const ctx = document.getElementById('chartAprovacao');
+
         if (ctx) {
+            // Conversão segura de valores do Jinja2 para JavaScript
+            // As aspas garantem que o JS leia como string primeiro, e o Number converte para número
+            // Isso evita erros de sintaxe se o valor vier vazio
+            const aprovados = Number("{{ stats.aprovados }}");
+            const reprovados = Number("{{ stats.reprovados }}");
+
             new Chart(ctx, {
                 type: 'doughnut',
                 data: {
                     labels: ['Aprovados', 'Reprovados'],
                     datasets: [{
-                        // Correção: Envolver as variáveis do template em aspas e converter para número
-                        // Isto previne o erro de sintaxe no JavaScript quando o ficheiro não é renderizado pelo servidor
-                        data: [Number('{{ stats.aprovados }}'), Number('{{ stats.reprovados }}')],
-                        backgroundColor: ['#198754', '#dc3545'], // Verde e Vermelho
+                        data: [aprovados, reprovados],
+                        backgroundColor: ['#198754', '#dc3545'], // Verde (Bootstrap Success) e Vermelho (Bootstrap Danger)
                         borderWidth: 0,
-                        hoverOffset: 10
+                        hoverOffset: 8
                     }]
                 },
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
                     plugins: {
-                        legend: { position: 'bottom', labels: { usePointStyle: true, padding: 20 } },
+                        legend: {
+                            position: 'bottom',
+                            labels: { usePointStyle: true, padding: 20, font: { size: 12 } }
+                        },
                         tooltip: {
                             callbacks: {
                                 label: function (context) {
                                     let label = context.label || '';
                                     let value = context.parsed;
                                     let total = context.dataset.data.reduce((a, b) => a + b, 0);
-                                    let percentage = 0;
-                                    if (total > 0) {
-                                        percentage = Math.round((value / total) * 100);
-                                    }
-                                    return label + ': ' + value + ' (' + percentage + '%)';
+                                    let percentage = Math.round((value / total) * 100) + '%';
+                                    return ` ${label}: ${value} alunos (${percentage})`;
                                 }
                             }
                         }
                     },
-                    cutout: '70%', // Faz o buraco da rosca
+                    cutout: '70%', // Estilo de rosca fina e moderna
+                    layout: { padding: 10 }
                 }
             });
         }
