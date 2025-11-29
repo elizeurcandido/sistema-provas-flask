@@ -291,7 +291,9 @@ def gerar_com_ia(prova_id):
         
         texto_completo = texto_completo[:30000] 
 
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        # CORREÇÃO DO NOME DO MODELO AQUI
+        model = genai.GenerativeModel('gemini-1.5-flash-latest')
+        
         prompt = f"""
         Você é um professor experiente. Com base no texto abaixo, crie 3 questões de múltipla escolha.
         TEXTO: {texto_completo}
